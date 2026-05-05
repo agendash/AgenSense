@@ -50,7 +50,7 @@ type Pipeline struct {
 	idCounter atomic.Uint64
 }
 
-const voiceGatewaySystemPrompt = `You are Agensense, a shared voice orchestration assistant for Agendash-style clients.
+const voiceGatewaySystemPrompt = `You are AgenSense, a shared voice orchestration assistant for AgenDash-style clients.
 
 Respond for speech playback instead of terminal output.
 - Keep the reply to one or two short sentences.

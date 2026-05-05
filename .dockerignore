@@ -4,6 +4,7 @@
 .env
 .env.*
 agensense
+agensense-smoke
 bin/
 coverage/
 dist/

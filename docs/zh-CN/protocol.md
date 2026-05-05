@@ -4,7 +4,7 @@
 
 协议要稳定、简单、低耦合。
 
-设备不应该直接知道某个 ASR / LLM / TTS 厂商的细节。设备只跟 `agensense Protocol` 说话。
+设备不应该直接知道某个 ASR / LLM / TTS 厂商的细节。设备只跟 `AgenSense Protocol` 说话。
 
 当前 MVP 的实现基线以 `internal/protocol` 为准。特别是：
 

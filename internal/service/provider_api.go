@@ -47,8 +47,8 @@ type AudioFormatInput struct {
 	Channels     int    `json:"channels"`
 }
 
-// VoiceAssistantIntent mirrors the Agendash Universal Voice Layer action shape.
-// It is optional metadata for clients that want Agensense to preserve UI scope.
+// VoiceAssistantIntent mirrors the AgenDash Universal Voice Layer action shape.
+// It is optional metadata for clients that want AgenSense to preserve UI scope.
 type VoiceAssistantIntent struct {
 	Scope                string         `json:"scope,omitempty"`
 	TargetID             string         `json:"target_id,omitempty"`

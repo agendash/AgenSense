@@ -201,7 +201,7 @@ func main() {
 		}
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "agensense smoke failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "AgenSense smoke failed: %v\n", err)
 		os.Exit(1)
 	}
 	printSummary(report)
@@ -210,14 +210,14 @@ func main() {
 func parseFlags() config {
 	now := time.Now().Format("20060102-150405")
 	cfg := config{}
-	flag.StringVar(&cfg.BaseURL, "base-url", envOrDefault("AGENSENSE_BASE_URL", defaultBaseURL), "Agensense HTTP base URL.")
-	flag.StringVar(&cfg.APIKey, "api-key", envOrDefault("AGENSENSE_API_KEY", defaultAPIKey), "Agensense API key for provider and voice websocket calls.")
-	flag.StringVar(&cfg.ProviderProfileID, "provider-profile-id", envOrDefault("AGENSENSE_PROVIDER_PROFILE", defaultProviderProfileID), "Provider profile used by the simulated Agendash voice session.")
+	flag.StringVar(&cfg.BaseURL, "base-url", envOrDefault("AGENSENSE_BASE_URL", defaultBaseURL), "AgenSense HTTP base URL.")
+	flag.StringVar(&cfg.APIKey, "api-key", envOrDefault("AGENSENSE_API_KEY", defaultAPIKey), "AgenSense API key for provider and voice websocket calls.")
+	flag.StringVar(&cfg.ProviderProfileID, "provider-profile-id", envOrDefault("AGENSENSE_PROVIDER_PROFILE", defaultProviderProfileID), "Provider profile used by the simulated AgenDash voice session.")
 	flag.BoolVar(&cfg.EnsureMockProfile, "ensure-mock-provider", envOrDefaultBool("AGENSENSE_SMOKE_ENSURE_MOCK_PROVIDER", true), "Create or update provider_profile_id as a mock:// ASR/LLM/TTS profile before the run.")
 	flag.StringVar(&cfg.InputSource, "input-source", envOrDefault("AGENSENSE_SMOKE_INPUT_SOURCE", "tts"), "Input audio source: tts or tone.")
-	flag.StringVar(&cfg.SeedText, "seed-text", envOrDefault("AGENSENSE_SMOKE_SEED_TEXT", "Please summarize the active workspace and say agensense smoke ok."), "Text synthesized first when input-source=tts.")
+	flag.StringVar(&cfg.SeedText, "seed-text", envOrDefault("AGENSENSE_SMOKE_SEED_TEXT", "Please summarize the active workspace and say AgenSense smoke ok."), "Text synthesized first when input-source=tts.")
 	flag.StringVar(&cfg.ClientID, "client-id", envOrDefault("AGENSENSE_SMOKE_CLIENT_ID", "agendash-smoke"), "Client ID sent in session.update.")
-	flag.StringVar(&cfg.DeviceLabel, "device-label", envOrDefault("AGENSENSE_SMOKE_DEVICE_LABEL", "Agendash Smoke"), "Device/client label sent in session.update.")
+	flag.StringVar(&cfg.DeviceLabel, "device-label", envOrDefault("AGENSENSE_SMOKE_DEVICE_LABEL", "AgenDash Smoke"), "Device/client label sent in session.update.")
 	flag.StringVar(&cfg.SessionID, "session-id", envOrDefault("AGENSENSE_SMOKE_SESSION_ID", "smoke-"+now), "Session ID sent in session.update.")
 	flag.StringVar(&cfg.OutputDir, "out", "", "Artifact directory. Defaults to tmp/smoke/<session-id>.")
 	flag.DurationVar(&cfg.Timeout, "timeout", envOrDefaultDuration("AGENSENSE_SMOKE_TIMEOUT", 60*time.Second), "End-to-end timeout.")
@@ -230,13 +230,13 @@ func parseFlags() config {
 	flag.BoolVar(&cfg.Realtime, "realtime", true, "Sleep between audio chunks to mimic live microphone streaming.")
 	flag.BoolVar(&cfg.ExpectDebug, "expect-debug", envOrDefaultBool("AGENSENSE_DEBUG", false), "Verify /debug/api/traces and audio assets after the voice turn. Defaults to AGENSENSE_DEBUG.")
 	flag.BoolVar(&cfg.PrintEvents, "print-events", true, "Print the event sequence in the final summary.")
-	flag.StringVar(&cfg.AgenleashBaseURL, "agenleash-base-url", envOrDefault("AGENLEASH_BASE_URL", ""), "Optional Agenleash base URL. When set, the smoke starts a code-agent session and posts a workspace prompt.")
-	flag.StringVar(&cfg.AgenleashToken, "agenleash-token", envOrDefault("AGENLEASH_TOKEN", ""), "Optional Agenleash token.")
-	flag.StringVar(&cfg.AgenleashAdapter, "agenleash-adapter", envOrDefault("AGENLEASH_ADAPTER", "codex"), "Agenleash adapter to start.")
-	flag.StringVar(&cfg.AgenleashWorkspace, "agenleash-workspace", envOrDefault("AGENLEASH_WORKSPACE", ""), "Workspace cwd for the optional Agenleash session. Defaults to the current directory.")
-	flag.StringVar(&cfg.AgenleashMessage, "agenleash-message", envOrDefault("AGENLEASH_MESSAGE", ""), "Message sent to the optional Agenleash session. Defaults to a safe workspace smoke prompt using the ASR transcript.")
-	flag.StringVar(&cfg.AgenleashMessageMode, "agenleash-message-mode", envOrDefault("AGENLEASH_MESSAGE_MODE", "start-arg"), "How to send the optional Agenleash prompt: start-arg or post.")
-	flag.DurationVar(&cfg.AgenleashWait, "agenleash-wait", envOrDefaultDuration("AGENLEASH_WAIT", 25*time.Second), "How long to poll the optional Agenleash session after posting the message.")
+	flag.StringVar(&cfg.AgenleashBaseURL, "agenleash-base-url", envOrDefault("AGENLEASH_BASE_URL", ""), "Optional AgenLeash base URL. When set, the smoke starts a code-agent session and posts a workspace prompt.")
+	flag.StringVar(&cfg.AgenleashToken, "agenleash-token", envOrDefault("AGENLEASH_TOKEN", ""), "Optional AgenLeash token.")
+	flag.StringVar(&cfg.AgenleashAdapter, "agenleash-adapter", envOrDefault("AGENLEASH_ADAPTER", "codex"), "AgenLeash adapter to start.")
+	flag.StringVar(&cfg.AgenleashWorkspace, "agenleash-workspace", envOrDefault("AGENLEASH_WORKSPACE", ""), "Workspace cwd for the optional AgenLeash session. Defaults to the current directory.")
+	flag.StringVar(&cfg.AgenleashMessage, "agenleash-message", envOrDefault("AGENLEASH_MESSAGE", ""), "Message sent to the optional AgenLeash session. Defaults to a safe workspace smoke prompt using the ASR transcript.")
+	flag.StringVar(&cfg.AgenleashMessageMode, "agenleash-message-mode", envOrDefault("AGENLEASH_MESSAGE_MODE", "start-arg"), "How to send the optional AgenLeash prompt: start-arg or post.")
+	flag.DurationVar(&cfg.AgenleashWait, "agenleash-wait", envOrDefaultDuration("AGENLEASH_WAIT", 25*time.Second), "How long to poll the optional AgenLeash session after posting the message.")
 	flag.Parse()
 
 	cfg.BaseURL = strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
@@ -483,7 +483,7 @@ func checkHealth(ctx context.Context, client *http.Client, baseURL string) error
 func ensureMockProvider(ctx context.Context, client *http.Client, cfg config) error {
 	body := map[string]any{
 		"id":           cfg.ProviderProfileID,
-		"name":         "Agendash Voice Smoke Mock",
+		"name":         "AgenDash Voice Smoke Mock",
 		"asr_base_url": "mock://asr",
 		"llm_base_url": "mock://llm",
 		"tts_base_url": "mock://tts",
@@ -1130,7 +1130,7 @@ func agenleashPrompt(cfg config, asrText string) string {
 	if strings.TrimSpace(cfg.AgenleashMessage) != "" {
 		return strings.TrimSpace(cfg.AgenleashMessage)
 	}
-	return fmt.Sprintf("Voice smoke ASR transcript: %q\nInspect the current workspace enough to confirm access, then reply with exactly: agensense workspace smoke ok", asrText)
+	return fmt.Sprintf("Voice smoke ASR transcript: %q\nInspect the current workspace enough to confirm access, then reply with exactly: AgenSense workspace smoke ok", asrText)
 }
 
 func checkAgenleashHealth(ctx context.Context, client *http.Client, cfg config) error {
@@ -1395,7 +1395,7 @@ func printSummary(report *smokeReport) {
 	if report == nil {
 		return
 	}
-	fmt.Println("agensense voice smoke OK")
+	fmt.Println("AgenSense voice smoke OK")
 	fmt.Printf("base_url: %s\n", report.BaseURL)
 	fmt.Printf("provider_profile_id: %s\n", report.ProviderProfileID)
 	fmt.Printf("session_id: %s\n", report.SessionID)

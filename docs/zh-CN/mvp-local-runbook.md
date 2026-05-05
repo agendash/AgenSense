@@ -291,7 +291,7 @@ go run ./cmd/agensense-smoke
 - provider profile：`smoke-mock`
 - 会自动注册 `mock://asr`、`mock://llm`、`mock://tts`
 - 输入音频：默认 `-input-source=tts`，即先用当前 provider 调 TTS 生成 seed audio，再流式送入 ASR/VAD
-- 种子文本：`Please summarize the active workspace and say agensense smoke ok.`
+- 种子文本：`Please summarize the active workspace and say AgenSense smoke ok.`
 - debug 校验：默认跟随 `AGENSENSE_DEBUG`；也可以显式传 `-expect-debug=true`
 - 产物目录：`tmp/smoke/<session-id>`
 
@@ -338,7 +338,7 @@ go run ./cmd/agensense-smoke \
   -agenleash-workspace="$(pwd)" \
   -agenleash-adapter=codex \
   -agenleash-wait=45s \
-  -agenleash-message='Reply with exactly: agensense workspace smoke ok'
+  -agenleash-message='Reply with exactly: AgenSense workspace smoke ok'
 ```
 
 如果专门要压测 AgenLeash 的消息发送接口，可以显式切到 post 模式：

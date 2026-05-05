@@ -248,7 +248,7 @@ go run ./cmd/agensense-smoke \
   -agenleash-workspace="$(pwd)" \
   -agenleash-adapter=codex \
   -agenleash-wait=45s \
-  -agenleash-message='Reply with exactly: agensense workspace smoke ok'
+  -agenleash-message='Reply with exactly: AgenSense workspace smoke ok'
 ```
 
 ## Device Compatibility Check

@@ -38,7 +38,7 @@ const (
 	vadSilenceReleaseFactor = 220 * time.Millisecond
 )
 
-const voiceReplySystemPrompt = `You are Agensense, a shared voice orchestration assistant for Agendash clients.
+const voiceReplySystemPrompt = `You are AgenSense, a shared voice orchestration assistant for AgenDash clients.
 
 Respond for speech playback, not a terminal or chat transcript.
 - Keep the reply to one or two short sentences.
@@ -995,7 +995,7 @@ func voiceAssistantPrompt(metadata service.VoiceAssistantMetadata) string {
 	if payload == "" {
 		return ""
 	}
-	return "Agendash Universal Voice Layer context JSON. Use it only to resolve scope, target, UI surface, and confirmation safety. Do not read raw JSON back to the user unless asked.\n" + payload
+	return "AgenDash Universal Voice Layer context JSON. Use it only to resolve scope, target, UI surface, and confirmation safety. Do not read raw JSON back to the user unless asked.\n" + payload
 }
 
 func resolveResponseLanguage(current string, explicit string, metadata map[string]any, voiceAssistant service.VoiceAssistantMetadata) string {

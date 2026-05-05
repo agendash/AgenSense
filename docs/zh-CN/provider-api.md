@@ -149,7 +149,7 @@ Authorization: Bearer <AGENSENSE_API_KEY>
 }
 ```
 
-`voice_assistant`、`ui_context`、`assistant_intent` 和 `metadata` 都是可选字段。AgenDash 桌面端会优先使用嵌套的 `voice_assistant` envelope；为了兼容轻量客户端，也可以把 `ui_context` / `assistant_intent` 放在请求顶层。当前直接 LLM API 不会隐式改写 `messages`，客户端仍应把希望模型看到的上下文写入 messages；Agensense 会保存这些字段用于 trace 和协议对齐。
+`voice_assistant`、`ui_context`、`assistant_intent` 和 `metadata` 都是可选字段。AgenDash 桌面端会优先使用嵌套的 `voice_assistant` envelope；为了兼容轻量客户端，也可以把 `ui_context` / `assistant_intent` 放在请求顶层。当前直接 LLM API 不会隐式改写 `messages`，客户端仍应把希望模型看到的上下文写入 messages；AgenSense 会保存这些字段用于 trace 和协议对齐。
 
 响应体示例：
 
