@@ -4,6 +4,14 @@ This document covers the deployment paths currently supported by the repository.
 
 ## Local Binary
 
+Install a released build with Homebrew:
+
+```sh
+brew install --cask agendash/tap/agensense
+agensense -version
+agensense
+```
+
 Build and run:
 
 ```sh
@@ -64,6 +72,12 @@ Or:
 When running inside Compose, AgenSense uses `http://localai:8080/v1`. The LocalAI service is exposed to the host at `http://127.0.0.1:8081`.
 
 See [LocalAI setup](localai.md) for model and API-key details.
+
+## Release Artifacts
+
+Tagged releases publish macOS, Linux, and Windows archives through GoReleaser. The same release workflow updates the Homebrew cask in `agendash/homebrew-tap`.
+
+See [Release process](release.md) for GitHub Action and Homebrew tap requirements.
 
 ## Container Image
 

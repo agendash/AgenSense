@@ -1,0 +1,104 @@
+version: 2
+
+project_name: agensense
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: agensense
+    main: ./cmd/agensense
+    binary: agensense
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/agendash/AgenSense/internal/buildinfo.Version={{ .Version }}
+      - -X github.com/agendash/AgenSense/internal/buildinfo.Commit={{ .Commit }}
+      - -X github.com/agendash/AgenSense/internal/buildinfo.Date={{ .Date }}
+
+  - id: agensense-smoke
+    main: ./cmd/agensense-smoke
+    binary: agensense-smoke
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/agendash/AgenSense/internal/buildinfo.Version={{ .Version }}
+      - -X github.com/agendash/AgenSense/internal/buildinfo.Commit={{ .Commit }}
+      - -X github.com/agendash/AgenSense/internal/buildinfo.Date={{ .Date }}
+
+archives:
+  - id: binaries
+    ids:
+      - agensense
+      - agensense-smoke
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - README.md
+      - README.zh-CN.md
+      - docs/**/*
+      - skills/**/*
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+
+release:
+  github:
+    owner: agendash
+    name: AgenSense
+
+homebrew_casks:
+  - name: agensense
+    ids:
+      - binaries
+    binaries:
+      - agensense
+      - agensense-smoke
+    repository:
+      owner: agendash
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    commit_author:
+      name: agendash-release-bot
+      email: actions@github.com
+    homepage: https://github.com/agendash/AgenSense
+    description: Reusable AI sensing gateway for provider profiles, ASR/LLM/TTS APIs, and voice WebSockets
+    url:
+      verified: github.com/agendash/AgenSense/
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/agensense"]
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/agensense-smoke"]
+          end

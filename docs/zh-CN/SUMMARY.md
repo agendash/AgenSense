@@ -6,6 +6,7 @@
 * [本地运行手册](mvp-local-runbook.md)
 * [部署](deployment.md)
 * [LocalAI 配置](localai.md)
+* [发布流程](release.md)
 * [设备 Bootstrap](device-bootstrap.md)
 * [实时协议](protocol.md)
 * [高可用与部署建议](deployment-ha.md)

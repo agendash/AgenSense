@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/agendash/AgenSense/internal/app"
+	"github.com/agendash/AgenSense/internal/buildinfo"
 	"github.com/agendash/AgenSense/internal/debugtrace"
 	"github.com/agendash/AgenSense/internal/device"
 	"github.com/agendash/AgenSense/internal/gateway"
@@ -22,6 +23,11 @@ import (
 )
 
 func main() {
+	if buildinfo.PrintRequested(os.Args[1:]) {
+		fmt.Println(buildinfo.Format("agensense"))
+		return
+	}
+
 	cfg, err := app.LoadConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load config: %v\n", err)

@@ -39,6 +39,16 @@ The shared service mode is the preferred path for desktop, GUI, service, and thi
 
 ## Quick Start
 
+Install with Homebrew after a tagged release has published the cask:
+
+```sh
+brew install --cask agendash/tap/agensense
+agensense -version
+agensense
+```
+
+Or build from source:
+
 ```sh
 go test ./...
 go build ./cmd/agensense
@@ -167,6 +177,8 @@ Common environment variables:
 - [Realtime protocol](docs/protocol.md)
 - [Deployment](docs/deployment.md)
 - [LocalAI setup](docs/localai.md)
+- [Release process](docs/release.md)
+- [Client integration skill](skills/agensense-client/SKILL.md)
 - [HA deployment notes](docs/deployment-ha.md)
 - [Roadmap](docs/roadmap.md)
 - [Developer handoff](docs/dev-handoff.md)
@@ -184,3 +196,4 @@ Common environment variables:
 - `internal/store`: file-backed local repository
 - `deploy`: deployment-adjacent notes and examples
 - `scripts`: local run and smoke helper scripts
+- `skills`: public client-integration skills for agents building on AgenSense

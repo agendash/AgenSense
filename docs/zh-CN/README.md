@@ -69,6 +69,7 @@ go run ./cmd/agensense-smoke \
 
 - [本地运行手册](mvp-local-runbook.md)
 - [Provider API](provider-api.md)
+- [发布流程](release.md)
 
 ## Debug 后台
 
@@ -285,6 +286,7 @@ curl -sS \
 - [设备 Bootstrap](device-bootstrap.md)：设备自注册 / 远程配置设计
 - [实时协议](protocol.md)：设备实时协议设计
 - [部署](deployment.md)：部署方式、Docker Compose 和脚本
+- [发布流程](release.md)：GitHub Release、GoReleaser 和 Homebrew tap
 - [LocalAI 配置](localai.md)：LocalAI 配置和默认地址说明
 - [高可用与部署建议](deployment-ha.md)：高可用与部署建议
 - [开源方案参考](open-source-options.md)：可参考或复用的开源方案

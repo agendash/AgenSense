@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agendash/AgenSense/internal/buildinfo"
 	"github.com/agendash/AgenSense/internal/protocol"
 )
 
@@ -190,6 +191,11 @@ type traceItem struct {
 }
 
 func main() {
+	if buildinfo.PrintRequested(os.Args[1:]) {
+		fmt.Println(buildinfo.Format("agensense-smoke"))
+		return
+	}
+
 	cfg := parseFlags()
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
 	defer cancel()
