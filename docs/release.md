@@ -6,12 +6,27 @@ The release workflow builds cross-platform archives, creates a GitHub Release, u
 
 ## GitHub Requirements
 
-Repository settings:
+If the organization allows writable workflow tokens, repository settings can use:
 
 - `Settings -> Actions -> General -> Workflow permissions`: allow read and write permissions for workflows.
-- `Settings -> Secrets and variables -> Actions`: add `HOMEBREW_TAP_GITHUB_TOKEN`.
 
-The `HOMEBREW_TAP_GITHUB_TOKEN` secret must be a GitHub token with write access to:
+If that setting is disabled or locked by the organization, use explicit release tokens instead. The current workflow expects these Actions secrets:
+
+- `RELEASE_GITHUB_TOKEN`: token with write access to `agendash/AgenSense` contents and releases.
+- `HOMEBREW_TAP_GITHUB_TOKEN`: token with write access to `agendash/homebrew-tap`.
+
+For a fine-grained personal access token, grant repository access to the target repo and set:
+
+- `Contents: Read and write`
+- `Metadata: Read-only`
+
+`RELEASE_GITHUB_TOKEN` must cover:
+
+```text
+agendash/AgenSense
+```
+
+`HOMEBREW_TAP_GITHUB_TOKEN` must cover:
 
 ```text
 agendash/homebrew-tap

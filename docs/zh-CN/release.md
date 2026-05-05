@@ -6,12 +6,27 @@ AgenSense 使用 tag 驱动发布，发布工作由 GoReleaser 完成。
 
 ## GitHub 要求
 
-仓库设置：
+如果 organization 允许 workflow token 写权限，可以设置：
 
 - `Settings -> Actions -> General -> Workflow permissions`：允许 workflow 读写仓库内容。
-- `Settings -> Secrets and variables -> Actions`：添加 `HOMEBREW_TAP_GITHUB_TOKEN`。
 
-`HOMEBREW_TAP_GITHUB_TOKEN` 需要能写入：
+如果这个设置是灰的或被 organization 锁定，就改用显式发布 token。当前 workflow 需要这些 Actions secrets：
+
+- `RELEASE_GITHUB_TOKEN`：能写入 `agendash/AgenSense` contents 和 releases。
+- `HOMEBREW_TAP_GITHUB_TOKEN`：能写入 `agendash/homebrew-tap`。
+
+如果使用 fine-grained personal access token，给目标仓库授权，并设置：
+
+- `Contents: Read and write`
+- `Metadata: Read-only`
+
+`RELEASE_GITHUB_TOKEN` 需要覆盖：
+
+```text
+agendash/AgenSense
+```
+
+`HOMEBREW_TAP_GITHUB_TOKEN` 需要覆盖：
 
 ```text
 agendash/homebrew-tap
