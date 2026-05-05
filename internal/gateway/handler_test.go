@@ -19,13 +19,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zhuzhe/agensense/internal/device"
-	"github.com/zhuzhe/agensense/internal/httpapi"
-	"github.com/zhuzhe/agensense/internal/protocol"
-	"github.com/zhuzhe/agensense/internal/provider"
-	"github.com/zhuzhe/agensense/internal/service"
-	"github.com/zhuzhe/agensense/internal/session"
-	"github.com/zhuzhe/agensense/internal/store"
+	"github.com/agendash/agensense/internal/device"
+	"github.com/agendash/agensense/internal/httpapi"
+	"github.com/agendash/agensense/internal/protocol"
+	"github.com/agendash/agensense/internal/provider"
+	"github.com/agendash/agensense/internal/service"
+	"github.com/agendash/agensense/internal/session"
+	"github.com/agendash/agensense/internal/store"
 )
 
 func TestGatewayRoundTrip(t *testing.T) {
@@ -41,12 +41,14 @@ func TestGatewayRoundTrip(t *testing.T) {
 	}
 
 	control := service.NewDeviceControl(device.NewService(repo), repo, 30)
+	registry := service.NewRegistryService(repo)
+	inference := service.NewRuntimeInferenceService(registry, provider.NewFactory(nil), nil)
 	pipeline := &session.Pipeline{
 		ASR: provider.MockASR{},
 		LLM: provider.MockLLM{},
 		TTS: provider.MockTTS{},
 	}
-	server := httptest.NewServer(httpapi.NewRouter(control, NewHandler(control, pipeline)))
+	server := httptest.NewServer(httpapi.NewRouter(control, registry, inference, NewHandler(control, pipeline), nil, nil))
 	defer server.Close()
 	control.SetPublicBaseURL(server.URL)
 

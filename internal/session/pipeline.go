@@ -6,8 +6,11 @@ import (
 	"log/slog"
 	"strings"
 	"sync/atomic"
+	"time"
 
-	"github.com/zhuzhe/agensense/internal/provider"
+	"github.com/agendash/agensense/internal/debugtrace"
+	"github.com/agendash/agensense/internal/provider"
+	"github.com/agendash/agensense/internal/voicelang"
 )
 
 // Action is a provider-agnostic device action emitted by the orchestration flow.
@@ -39,12 +42,22 @@ type PipelineRequest struct {
 
 // Pipeline composes the provider interfaces into one speech turn.
 type Pipeline struct {
-	ASR provider.ASRClient
-	LLM provider.LLMClient
-	TTS provider.TTSClient
+	ASR   provider.ASRClient
+	LLM   provider.LLMClient
+	TTS   provider.TTSClient
+	Debug *debugtrace.Store
 
 	idCounter atomic.Uint64
 }
+
+const voiceGatewaySystemPrompt = `You are Agensense, a shared voice orchestration assistant for Agendash-style clients.
+
+Respond for speech playback instead of terminal output.
+- Keep the reply to one or two short sentences.
+- Prefer the concrete outcome, next step, or blocking issue.
+- Do not output markdown, JSON, XML, ANSI escapes, tool-call notation, or hidden reasoning.
+- If a request requires a focused remote code agent and none is attached, say that directly and ask the user to focus an agent first.
+- If the input is an approval or control command, keep the confirmation short and explicit.`
 
 // Run executes one voice turn against the configured providers.
 func (p *Pipeline) Run(ctx context.Context, req PipelineRequest, sink Sink) error {
@@ -52,6 +65,11 @@ func (p *Pipeline) Run(ctx context.Context, req PipelineRequest, sink Sink) erro
 		return fmt.Errorf("session pipeline: provider dependencies are incomplete")
 	}
 
+	turnStart := time.Now()
+	asrStart := turnStart
+	trace := p.startTrace(req)
+	trace.SetInputAudio(req.Format, req.Audio)
+	trace.StartASR(req.Format, len(req.Audio))
 	slog.InfoContext(ctx, "asr request started",
 		"device_id", req.DeviceID,
 		"session_id", req.SessionID,
@@ -74,36 +92,45 @@ func (p *Pipeline) Run(ctx context.Context, req PipelineRequest, sink Sink) erro
 			"stream_id", req.StreamID,
 			"error", err,
 		)
+		trace.Fail(err)
 		return err
 	}
 	slog.InfoContext(ctx, "asr request completed",
 		"device_id", req.DeviceID,
 		"session_id", req.SessionID,
 		"stream_id", req.StreamID,
+		"duration_ms", time.Since(asrStart).Milliseconds(),
 		"text_chars", len(asrResp.Text),
 		"text", asrResp.Text,
 	)
+	trace.CompleteASR(asrResp.Text)
 	if err := sink.OnASRFinal(asrResp.Text); err != nil {
+		trace.Fail(err)
 		return err
 	}
 
 	var llmReply strings.Builder
+	llmStart := time.Now()
+	messages := []provider.ChatMessage{
+		{Role: "system", Content: voiceGatewaySystemPrompt},
+		{Role: "system", Content: voicelang.Instruction(voicelang.Auto, asrResp.Text)},
+		{Role: "user", Content: asrResp.Text},
+	}
+	trace.StartLLM(messages)
 	slog.InfoContext(ctx, "llm request started",
 		"device_id", req.DeviceID,
 		"session_id", req.SessionID,
 		"stream_id", req.StreamID,
-		"message_count", 2,
+		"message_count", len(messages),
 		"user_prompt_chars", len(asrResp.Text),
 	)
 	err = p.LLM.ChatStream(ctx, provider.ChatRequest{
 		DeviceID:  req.DeviceID,
 		SessionID: req.SessionID,
-		Messages: []provider.ChatMessage{
-			{Role: "system", Content: "You are the mock voice gateway assistant."},
-			{Role: "user", Content: asrResp.Text},
-		},
+		Messages:  messages,
 	}, func(delta provider.ChatDelta) error {
 		llmReply.WriteString(delta.Text)
+		trace.AddLLMDelta(delta.Text)
 		return sink.OnLLMDelta(delta.Text)
 	})
 	if err != nil {
@@ -113,6 +140,7 @@ func (p *Pipeline) Run(ctx context.Context, req PipelineRequest, sink Sink) erro
 			"stream_id", req.StreamID,
 			"error", err,
 		)
+		trace.Fail(err)
 		return err
 	}
 
@@ -124,10 +152,13 @@ func (p *Pipeline) Run(ctx context.Context, req PipelineRequest, sink Sink) erro
 		"device_id", req.DeviceID,
 		"session_id", req.SessionID,
 		"stream_id", req.StreamID,
+		"duration_ms", time.Since(llmStart).Milliseconds(),
 		"reply_chars", len(replyText),
 		"reply_text", replyText,
 	)
+	trace.CompleteLLM(replyText)
 	if err := sink.OnLLMDone(replyText); err != nil {
+		trace.Fail(err)
 		return err
 	}
 
@@ -136,6 +167,8 @@ func (p *Pipeline) Run(ctx context.Context, req PipelineRequest, sink Sink) erro
 	if ttsFormat.Codec == "" {
 		ttsFormat.Codec = "pcm_s16le"
 	}
+	ttsStart := time.Now()
+	trace.StartTTS(replyText, ttsFormat)
 	slog.InfoContext(ctx, "tts request started",
 		"device_id", req.DeviceID,
 		"session_id", req.SessionID,
@@ -147,6 +180,7 @@ func (p *Pipeline) Run(ctx context.Context, req PipelineRequest, sink Sink) erro
 		"channels", ttsFormat.Channels,
 	)
 	if err := sink.OnTTSStart(ttsStreamID, ttsFormat, replyText); err != nil {
+		trace.Fail(err)
 		return err
 	}
 	ttsBytes := 0
@@ -157,6 +191,7 @@ func (p *Pipeline) Run(ctx context.Context, req PipelineRequest, sink Sink) erro
 		Format:    ttsFormat,
 	}, func(chunk provider.AudioChunk) error {
 		ttsBytes += len(chunk.Data)
+		trace.AddTTSChunk(chunk.Data)
 		return sink.OnTTSChunk(chunk.Data)
 	})
 	if err != nil {
@@ -166,17 +201,28 @@ func (p *Pipeline) Run(ctx context.Context, req PipelineRequest, sink Sink) erro
 			"stream_id", ttsStreamID,
 			"error", err,
 		)
+		trace.Fail(err)
 		return err
 	}
 	if err := sink.OnTTSStop(ttsStreamID); err != nil {
+		trace.Fail(err)
 		return err
 	}
 	slog.InfoContext(ctx, "tts request completed",
 		"device_id", req.DeviceID,
 		"session_id", req.SessionID,
 		"stream_id", ttsStreamID,
+		"duration_ms", time.Since(ttsStart).Milliseconds(),
 		"audio_bytes", ttsBytes,
 	)
+	trace.CompleteTTS(ttsFormat)
+	slog.InfoContext(ctx, "voice turn completed",
+		"device_id", req.DeviceID,
+		"session_id", req.SessionID,
+		"stream_id", req.StreamID,
+		"total_duration_ms", time.Since(turnStart).Milliseconds(),
+	)
+	trace.Complete()
 
 	return sink.OnAction(Action{
 		ActionID: p.nextID("act"),
@@ -184,6 +230,16 @@ func (p *Pipeline) Run(ctx context.Context, req PipelineRequest, sink Sink) erro
 		Payload: map[string]any{
 			"reason": "mock pipeline complete",
 		},
+	})
+}
+
+func (p *Pipeline) startTrace(req PipelineRequest) *debugtrace.Handle {
+	if p == nil || p.Debug == nil {
+		return nil
+	}
+	return p.Debug.StartTrace(debugtrace.KindVoiceTurn, debugtrace.SourceWS, debugtrace.TraceMeta{
+		DeviceID:  req.DeviceID,
+		SessionID: req.SessionID,
 	})
 }
 

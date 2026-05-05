@@ -4,7 +4,7 @@ import "fmt"
 
 // StreamTracker enforces the MVP rule that only one stream is active at a time.
 type StreamTracker struct {
-	active    *AudioStartPayload
+	active     *AudioStartPayload
 	frameCount int
 }
 

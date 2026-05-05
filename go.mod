@@ -1,3 +1,3 @@
-module github.com/zhuzhe/agensense
+module github.com/agendash/agensense
 
 go 1.26.0

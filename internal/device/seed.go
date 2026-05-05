@@ -7,16 +7,22 @@ import (
 )
 
 const (
-	DemoTenantID       = "home-lab"
-	DemoInstanceID     = "cn-shanghai-main"
-	DemoProviderID     = "mock"
-	DemoDeviceID       = "vdk-coreS3-001"
-	DemoClaimToken     = "factory-claim-token"
-	DemoGatewayWSURL   = "ws://127.0.0.1:8080/v1/session/ws"
-	DemoConfigSource   = "demo-seed"
-	DemoConfigVersion  = int64(1)
-	DemoFirmwareSKU    = "m5cores3-facekit-audio"
-	DemoFirmwareChipID = "esp32s3-abcdef"
+	DemoTenantID        = "home-lab"
+	DemoInstanceID      = "cn-shanghai-main"
+	DemoProviderID      = "default"
+	DemoDeviceID        = "vdk-coreS3-001"
+	DemoClaimToken      = "factory-claim-token"
+	DemoGatewayWSURL    = "ws://127.0.0.1:8080/v1/session/ws"
+	DemoConfigSource    = "demo-seed"
+	DemoConfigVersion   = int64(1)
+	DemoFirmwareSKU     = "m5cores3-facekit-audio"
+	DemoFirmwareChipID  = "esp32s3-abcdef"
+	DemoProviderName    = "Mock Default"
+	DemoProviderBaseURL = "mock://default"
+	DemoProviderAPIKey  = ""
+	DemoASRModel        = "mock-asr"
+	DemoLLMModel        = "mock-llm"
+	DemoTTSModel        = "mock-tts"
 )
 
 type DemoSeed struct {
@@ -93,13 +99,16 @@ func BuildDemoSeed(now time.Time) DemoSeed {
 		ProviderProfile: ProviderProfile{
 			ID:         DemoProviderID,
 			TenantID:   DemoTenantID,
-			Name:       "mock",
-			ASRBaseURL: "mock://asr",
-			ASRModel:   "mock-asr",
-			LLMBaseURL: "mock://llm",
-			LLMModel:   "mock-llm",
-			TTSBaseURL: "mock://tts",
-			TTSModel:   "mock-tts",
+			Name:       DemoProviderName,
+			ASRBaseURL: DemoProviderBaseURL,
+			ASRAPIKey:  DemoProviderAPIKey,
+			ASRModel:   DemoASRModel,
+			LLMBaseURL: DemoProviderBaseURL,
+			LLMAPIKey:  DemoProviderAPIKey,
+			LLMModel:   DemoLLMModel,
+			TTSBaseURL: DemoProviderBaseURL,
+			TTSAPIKey:  DemoProviderAPIKey,
+			TTSModel:   DemoTTSModel,
 			CreatedAt:  now,
 			UpdatedAt:  now,
 		},

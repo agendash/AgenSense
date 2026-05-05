@@ -2,8 +2,9 @@
 .env
 .env.*
 .butler/
+skill/
 bin/
 dist/
 tmp/
 coverage/
-agensense
+/agensense

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zhuzhe/agensense/internal/device"
+	"github.com/agendash/agensense/internal/device"
 )
 
 func TestFileRepositorySeedDemoAndReload(t *testing.T) {

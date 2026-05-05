@@ -6,17 +6,19 @@
 
 ## Milestone 1
 
-实现控制面最小集合：
+先把共享服务模式打稳：
 
-- bootstrap
-- device claim
-- instance / device / provider profile 数据模型
-- config versioning
+- API key namespace
+- provider profile 注册 / 查询 / 默认值
+- direct-use ASR / LLM / TTS API
+- 本地 JSON store 持久化
 
 ## Milestone 2
 
-实现实时网关最小集合：
+保留设备兼容模式：
 
+- bootstrap
+- device config / telemetry
 - `hello`
 - `telemetry.update`
 - `audio.start` / binary / `audio.stop`
@@ -25,30 +27,30 @@
 
 ## Milestone 3
 
-接通一条最小可用 voice combo：
+把 provider runtime 做完整：
 
-- 远程 ASR
-- 远程 LLM
-- 远程 TTS
-- 流式回传
+- VAD runtime
+- provider 健康检查
+- retry / timeout / breaker
+- direct-use API 的更稳定编排
 
 ## Milestone 4
 
 补齐生产必需项：
 
-- token 刷新
-- retry / timeout / breaker
+- 凭据安全存储
 - 审计日志
 - 指标
-- 基础后台
+- 配额 / 限流
 
 ## Milestone 5
 
-支持多实例、多项目、多硬件：
+扩展接入面：
 
-- CoreS3
-- Xiaozhi Card
-- 后续更多 ESP32-S3 板卡
+- `Agendash`
+- `Agenleash`
+- 第三方非 agen 客户端
+- 硬件设备继续兼容接入
 
 ## Milestone 6
 

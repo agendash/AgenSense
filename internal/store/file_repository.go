@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/zhuzhe/agensense/internal/device"
+	"github.com/agendash/agensense/internal/device"
 )
 
 const stateSchemaVersion = 1

@@ -51,6 +51,7 @@ type ProviderProfile struct {
 	TTSModel   string    `json:"tts_model,omitempty"`
 	VADBaseURL string    `json:"vad_base_url,omitempty"`
 	VADAPIKey  string    `json:"vad_api_key,omitempty"`
+	VADModel   string    `json:"vad_model,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
 }

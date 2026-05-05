@@ -9,12 +9,47 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/zhuzhe/agensense/internal/service"
+	"github.com/agendash/agensense/internal/debugtrace"
+	"github.com/agendash/agensense/internal/service"
 )
 
 type fakeControl struct {
 	deviceCtx service.DeviceContext
 }
+
+type fakeRegistry struct {
+	profiles []service.ProviderProfileResponse
+}
+
+func (f fakeRegistry) UpsertProviderProfile(context.Context, string, service.ProviderProfileRequest) (service.ProviderProfileResponse, error) {
+	return service.ProviderProfileResponse{
+		ID:        "mock-default",
+		Namespace: "apikey_deadbeef",
+		Default:   true,
+		LLMModel:  "mock-llm",
+	}, nil
+}
+
+func (f fakeRegistry) ListProviderProfiles(context.Context, string) ([]service.ProviderProfileResponse, error) {
+	if f.profiles != nil {
+		return f.profiles, nil
+	}
+	return []service.ProviderProfileResponse{{
+		ID:        "mock-default",
+		Namespace: "apikey_deadbeef",
+		Default:   true,
+	}}, nil
+}
+
+func (f fakeRegistry) GetProviderProfile(context.Context, string, string) (service.ProviderProfileResponse, error) {
+	return service.ProviderProfileResponse{
+		ID:        "mock-default",
+		Namespace: "apikey_deadbeef",
+		Default:   true,
+	}, nil
+}
+
+type fakeInference struct{}
 
 func (f fakeControl) Bootstrap(context.Context, service.BootstrapRequest) (service.BootstrapResponse, error) {
 	return service.BootstrapResponse{
@@ -41,10 +76,34 @@ func (fakeControl) AckConfig(context.Context, string, int64) error {
 	return nil
 }
 
+func (fakeInference) Transcribe(context.Context, string, service.ASRInferenceRequest) (service.ASRInferenceResponse, error) {
+	return service.ASRInferenceResponse{
+		ProviderProfileID: "mock-default",
+		Text:              "mock transcript",
+	}, nil
+}
+
+func (fakeInference) Chat(context.Context, string, service.ChatInferenceRequest) (service.ChatInferenceResponse, error) {
+	return service.ChatInferenceResponse{
+		ProviderProfileID: "mock-default",
+		Text:              "mock reply",
+		Deltas:            []string{"mock ", "reply"},
+	}, nil
+}
+
+func (fakeInference) Synthesize(context.Context, string, service.TTSInferenceRequest) (service.TTSInferenceResponse, error) {
+	return service.TTSInferenceResponse{
+		ProviderProfileID: "mock-default",
+		Format:            service.AudioFormatInput{Codec: "pcm_s16le", SampleRateHz: 16000, Channels: 1},
+		AudioBase64:       "AQID",
+		ChunkCount:        1,
+	}, nil
+}
+
 func TestBootstrapRoute(t *testing.T) {
 	t.Parallel()
 
-	handler := NewRouter(fakeControl{}, nil)
+	handler := NewRouter(fakeControl{}, fakeRegistry{}, fakeInference{}, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/bootstrap", bytes.NewBufferString(`{"device_id":"dev-001"}`))
 	rec := httptest.NewRecorder()
 
@@ -72,7 +131,7 @@ func TestConfigRoute(t *testing.T) {
 			ReportedConfig:    1,
 			Config:            map[string]any{"voice": map[string]any{"enabled": true}},
 		},
-	}, nil)
+	}, fakeRegistry{}, fakeInference{}, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodGet, "/v1/device/config", nil)
 	req.Header.Set("Authorization", "Bearer token-001")
 	req.Header.Set("X-Device-Id", "dev-001")
@@ -86,5 +145,94 @@ func TestConfigRoute(t *testing.T) {
 	body, _ := io.ReadAll(rec.Body)
 	if !bytes.Contains(body, []byte(`"provider_profile_id":"mock-default"`)) {
 		t.Fatalf("unexpected body: %s", body)
+	}
+}
+
+func TestProviderRegistryRoute(t *testing.T) {
+	t.Parallel()
+
+	handler := NewRouter(fakeControl{}, fakeRegistry{}, fakeInference{}, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/v1/providers", bytes.NewBufferString(`{"id":"mock-default","llm_model":"mock-llm","default":true}`))
+	req.Header.Set("Authorization", "Bearer test-api-key")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body, _ := io.ReadAll(rec.Body)
+	if !bytes.Contains(body, []byte(`"id":"mock-default"`)) {
+		t.Fatalf("unexpected body: %s", body)
+	}
+}
+
+func TestDirectLLMRoute(t *testing.T) {
+	t.Parallel()
+
+	handler := NewRouter(fakeControl{}, fakeRegistry{}, fakeInference{}, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/v1/llm/chat", bytes.NewBufferString(`{"provider_profile_id":"mock-default","messages":[{"role":"user","content":"hello"}]}`))
+	req.Header.Set("Authorization", "Bearer test-api-key")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body, _ := io.ReadAll(rec.Body)
+	if !bytes.Contains(body, []byte(`"text":"mock reply"`)) {
+		t.Fatalf("unexpected body: %s", body)
+	}
+}
+
+func TestDebugTraceRoutes(t *testing.T) {
+	t.Parallel()
+
+	debugStore := debugtrace.NewStore(8)
+	handle := debugStore.StartTrace(debugtrace.KindLLM, debugtrace.SourceHTTP, debugtrace.TraceMeta{
+		ClientID:  "client-001",
+		SessionID: "sess-001",
+		HTTPPath:  "/v1/llm/chat",
+	})
+	handle.StartLLM(nil)
+	handle.AddLLMDelta("hello")
+	handle.CompleteLLM("hello")
+	handle.Complete()
+
+	handler := NewRouter(fakeControl{}, fakeRegistry{}, fakeInference{}, nil, nil, debugStore)
+
+	listReq := httptest.NewRequest(http.MethodGet, "/debug/api/traces", nil)
+	listRec := httptest.NewRecorder()
+	handler.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want %d", listRec.Code, http.StatusOK)
+	}
+	listBody, _ := io.ReadAll(listRec.Body)
+	if !bytes.Contains(listBody, []byte(`"kind":"llm"`)) {
+		t.Fatalf("unexpected list body: %s", listBody)
+	}
+
+	pageReq := httptest.NewRequest(http.MethodGet, "/debug/traces", nil)
+	pageRec := httptest.NewRecorder()
+	handler.ServeHTTP(pageRec, pageReq)
+	if pageRec.Code != http.StatusOK {
+		t.Fatalf("page status = %d, want %d", pageRec.Code, http.StatusOK)
+	}
+	if !bytes.Contains(pageRec.Body.Bytes(), []byte("Debug Traces")) {
+		t.Fatalf("unexpected page body: %s", pageRec.Body.Bytes())
+	}
+}
+
+func TestDebugTraceRoutesDisabled(t *testing.T) {
+	t.Parallel()
+
+	handler := NewRouter(fakeControl{}, fakeRegistry{}, fakeInference{}, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/debug/api/traces", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }

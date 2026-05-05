@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -9,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zhuzhe/agensense/internal/gateway/wsconn"
-	"github.com/zhuzhe/agensense/internal/provider"
-	"github.com/zhuzhe/agensense/internal/protocol"
-	"github.com/zhuzhe/agensense/internal/service"
-	"github.com/zhuzhe/agensense/internal/session"
+	"github.com/agendash/agensense/internal/gateway/wsconn"
+	"github.com/agendash/agensense/internal/protocol"
+	"github.com/agendash/agensense/internal/provider"
+	"github.com/agendash/agensense/internal/service"
+	"github.com/agendash/agensense/internal/session"
 )
 
 // Handler serves the MVP WebSocket gateway protocol.
@@ -268,13 +267,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					conn:      conn,
 					sessionID: sessionID,
 				}
+				turnStart := time.Now()
 				slog.Info("voice turn received",
 					"device_id", deviceCtx.DeviceID,
 					"session_id", sessionID,
 					"stream_id", streamState.ID,
 					"audio_bytes", len(streamState.Audio),
 				)
-				err := h.pipeline.Run(context.Background(), session.PipelineRequest{
+				err := h.pipeline.Run(r.Context(), session.PipelineRequest{
 					SessionID: sessionID,
 					DeviceID:  deviceCtx.DeviceID,
 					StreamID:  streamState.ID,
@@ -287,6 +287,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 						"device_id", deviceCtx.DeviceID,
 						"session_id", sessionID,
 						"stream_id", audioStop.StreamID,
+						"duration_ms", time.Since(turnStart).Milliseconds(),
 						"error", err,
 					)
 					_ = writeProtocolEvent(conn, sessionID, "", protocol.EventError, protocol.ErrorPayload{
@@ -299,6 +300,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					"device_id", deviceCtx.DeviceID,
 					"session_id", sessionID,
 					"stream_id", audioStop.StreamID,
+					"duration_ms", time.Since(turnStart).Milliseconds(),
 				)
 			case protocol.EventConfigAck:
 				var ack protocol.ConfigAckPayload
@@ -390,9 +392,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 type gatewayStreamState struct {
-	ID     string
-	Format provider.AudioFormat
-	Audio  []byte
+	ID      string
+	Format  provider.AudioFormat
+	Audio   []byte
 	Tracker protocol.StreamTracker
 }
 

@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/zhuzhe/agensense/internal/provider"
+	"github.com/agendash/agensense/internal/provider"
 )
 
 type testSink struct {

@@ -88,6 +88,30 @@ MVP 里所有 JSON 消息都统一包一层：
 
 ## 关键事件
 
+### Agendash 语音会话扩展
+
+Agendash 风格客户端可以先发 `session.update` 来设置会话上下文：
+
+```json
+{
+  "type": "session.update",
+  "payload": {
+    "client_id": "agendash-desktop",
+    "session_id": "voice-session-001",
+    "provider_profile_id": "default",
+    "response_language": "auto",
+    "voice_assistant": {
+      "contract": "universal_voice_layer_v1",
+      "ui_context": {
+        "current_scene": "chat"
+      }
+    }
+  }
+}
+```
+
+`response_language` 可选值为 `auto`、`zh-Hans`、`zh-Hant`、`en`。`auto` 会跟随用户输入的大语言方向，但中文回复默认使用简体，避免 ASR 转写成繁体时把 TTS 回复也带成繁体。
+
 ### 设备到服务端
 
 #### `telemetry.update`

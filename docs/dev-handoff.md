@@ -1,159 +1,113 @@
 # Dev Handoff
 
-这份文档给下一个开发 session 直接开工用。
+这份文档给下一个开发 session 直接开工用，基于当前第一版代码现实，而不是未来的理想形态。
 
-## 第一阶段目标
+## 当前第一版目标
 
-先做最小可用闭环，不做后台页面，不做复杂多 provider，不做高级观测。
+第一版现在的主目标已经变成两条线并存：
 
-闭环定义：
+1. 共享服务模式可用：
+   - API key 可以隔离调用方
+   - provider profile 可以注册、持久化、复用
+   - 可以直接调用 ASR / LLM / TTS
+2. 设备兼容模式保留：
+   - bootstrap / config / telemetry / WebSocket 继续可用
+   - 用于硬件协议回归和 mock-friendly 验证
 
-1. 设备可以 bootstrap。
-2. 设备可以拿到 token 和实例配置。
-3. 设备可以通过 WebSocket 建立会话。
-4. 设备可以上传一段 PCM 音频。
-5. 服务端可以调用一套远程 `ASR -> LLM -> TTS`。
-6. 服务端可以把 TTS 音频流回设备。
-7. 服务端可以下发一个 `action.execute`，设备能执行。
+不要再把项目只理解成“设备网关”。
 
-## 推荐技术栈
+## 当前代码已经有什么
 
-- Go 1.24+
-- HTTP: `chi` 或 `gin`
-- WebSocket: `nhooyr.io/websocket` 或 `gorilla/websocket`
-- DB: PostgreSQL
-- Cache: Redis
-- Config: `koanf` 或纯环境变量 + yaml
-- Logging: `zap`
-- Metrics: `prometheus/client_golang`
+### 入口和存储
 
-## 包结构建议
+- `cmd/agensense/main.go`
+- `internal/store/file_repository.go`
 
-```text
-cmd/agensense
-internal/bootstrap
-internal/auth
-internal/config
-internal/device
-internal/gateway
-internal/provider
-internal/provider/asr
-internal/provider/llm
-internal/provider/tts
-internal/session
-internal/store/postgres
-internal/store/redis
-internal/httpapi
-```
+当前第一版是单进程 + 本地 JSON store。
 
-## 第一批接口
+### HTTP API
 
-### 控制面
-
+- `GET /healthz`
 - `POST /v1/bootstrap`
 - `GET /v1/device/config`
 - `POST /v1/device/telemetry`
-
-### 实时面
-
 - `GET /v1/session/ws`
+- `GET/POST /v1/providers`
+- `GET/PATCH /v1/providers/{id}`
+- `POST /v1/asr/transcribe`
+- `POST /v1/llm/chat`
+- `POST /v1/tts/synthesize`
 
-## 第一批表
+### 关键服务
 
-至少先建这些表：
+- `internal/service/provider_registry.go`
+  - 负责把 `AGENSENSE_API_KEY` 映射成稳定 namespace
+  - 在 namespace 下存取 provider profile
+  - 支持默认 profile 解析
+- `internal/service/inference.go`
+  - 提供 direct-use ASR / LLM / TTS
+- `internal/provider/factory.go`
+  - 根据 provider profile 构造 mock 或 OpenAI 兼容 provider client
+- `internal/provider/openai_compatible.go`
+  - 已经接上 OpenAI 兼容 ASR / LLM / TTS HTTP 接口
 
-- `tenants`
-- `instances`
-- `devices`
-- `provider_profiles`
-- `device_config_versions`
+### 设备兼容链路
 
-## 第一批数据结构
+- `internal/gateway`
+- `internal/protocol`
+- `internal/session`
 
-### Device
+当前设备 WebSocket 语音链路还是接 mock pipeline，主要用于协议验证。不要误以为它已经自动复用了 provider registry。
 
-```go
-type Device struct {
-    ID                    string
-    TenantID              string
-    InstanceID            string
-    HardwareSKU           string
-    ChipID                string
-    MACAddr               string
-    FirmwareVersion       string
-    FirmwareChannel       string
-    DeviceTokenHash       string
-    DesiredConfigVersion  int64
-    ReportedConfigVersion int64
-    CapabilitiesJSON      []byte
-}
-```
+## 当前边界
 
-### ProviderProfile
+第一版已经明确支持：
 
-```go
-type ProviderProfile struct {
-    ID              string
-    TenantID        string
-    ASRBaseURL      string
-    ASRAPIKey       string
-    ASRModel        string
-    LLMBaseURL      string
-    LLMAPIKey       string
-    LLMModel        string
-    TTSBaseURL      string
-    TTSAPIKey       string
-    TTSModel        string
-    VADBaseURL      string
-    VADAPIKey       string
-}
-```
+- API key 维度的 provider profile 注册和复用
+- `mock://` provider
+- OpenAI 兼容 provider
+- direct-use ASR / LLM / TTS API
+- 设备 bootstrap / WebSocket 协议
 
-## Provider 层约束
+第一版明确还没做：
 
-不要让业务代码直接拼 OpenAI 兼容请求。
+- VAD 运行时接口
+- provider 凭据加密存储
+- provider 健康检查与主动保活
+- 设备 WebSocket 语音链路切换到 registry/factory
+- 多 API key 管理后台
+- 审计、配额、细粒度限流
 
-定义统一接口：
+## 继续开发时的优先级
 
-```go
-type ASRClient interface {
-    Transcribe(ctx context.Context, req TranscribeRequest) (TranscribeResponse, error)
-}
+### 1. 先补共享服务，不要先做后台
 
-type LLMClient interface {
-    ChatStream(ctx context.Context, req ChatRequest, cb func(ChatDelta) error) error
-}
+优先级建议：
 
-type TTSClient interface {
-    SynthesizeStream(ctx context.Context, req TTSRequest, cb func(AudioChunk) error) error
-}
-```
+1. VAD 运行时接口
+2. provider 健康检查
+3. provider 凭据的更安全存储
+4. direct-use API 的审计和限流
 
-## 第一批验收标准
+### 2. 再决定设备链路是否要切到统一编排
 
-### 本地验收
+如果 `Agendash` 和其他 GUI 客户端主要走 direct-use API，那么设备 WebSocket 链路可以继续保留为兼容模式。
 
-- 用 curl 能成功 bootstrap 一个假设备
-- 用 WebSocket 客户端能完成 `hello`
-- 上传一段 16k PCM 能拿到 `asr.final`
-- 服务端能流式回 `tts` 音频块
+如果后面要让硬件设备也走真实 provider，而不是 mock pipeline，再把 `internal/gateway` 里的音频回路切到 `RegistryService + Factory`。
 
-### 设备验收
+### 3. 不要过早引入重基础设施
 
-- ESP32 设备能拿到 bootstrap 配置
-- 设备能连接 ws
-- 设备能说一句话，收到一句 TTS
+当前先不要：
 
-## 不要现在做的东西
+- 先拆微服务
+- 先上消息队列
+- 先做完整后台管理 UI
+- 先做多协议大战
 
-- 不要现在做完整后台管理 UI
-- 不要一开始上消息队列
-- 不要先做多协议兼容
-- 不要把 HID 细节写进网关内核
+## 开发约束
 
-## 代码风格要求
-
-- 领域对象和 provider client 分层
-- 协议结构体单独定义
-- 所有外部依赖都走接口
-- 配置变更默认带版本号
+- 业务层不要直接拼 OpenAI 兼容请求
+- provider 访问统一走 `ASRClient` / `LLMClient` / `TTSClient`
+- direct-use API 不强依赖 `device_id`
+- 新增字段时优先考虑 API key namespace 语义，而不是硬件实体语义
+- 文档统一使用“第一版”表述，不再另起所谓 `v2`

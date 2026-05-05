@@ -8,14 +8,14 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/zhuzhe/agensense/internal/device"
+	"github.com/agendash/agensense/internal/device"
 )
 
 // DeviceControl adapts the domain-level device service to the HTTP/WebSocket control-plane contract.
 type DeviceControl struct {
-	devices      *device.Service
-	repo         device.Repository
-	retryHintSec int
+	devices       *device.Service
+	repo          device.Repository
+	retryHintSec  int
 	publicBaseURL string
 }
 

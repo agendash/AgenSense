@@ -10,7 +10,7 @@ import (
 
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if req.URL.Path == "/v1/session/ws" {
+		if req.URL.Path == "/v1/session/ws" || req.URL.Path == "/v1/voice/ws" {
 			next.ServeHTTP(w, req)
 			return
 		}
