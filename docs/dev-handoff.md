@@ -1,113 +1,76 @@
-# Dev Handoff
+# Developer Handoff
 
-这份文档给下一个开发 session 直接开工用，基于当前第一版代码现实，而不是未来的理想形态。
+This checklist captures the current AgenSense implementation and the next useful engineering steps.
 
-## 当前第一版目标
+## Current State
 
-第一版现在的主目标已经变成两条线并存：
+Implemented:
 
-1. 共享服务模式可用：
-   - API key 可以隔离调用方
-   - provider profile 可以注册、持久化、复用
-   - 可以直接调用 ASR / LLM / TTS
-2. 设备兼容模式保留：
-   - bootstrap / config / telemetry / WebSocket 继续可用
-   - 用于硬件协议回归和 mock-friendly 验证
+- single-process service entrypoint in `cmd/agensense`
+- file-backed repository in `internal/store`
+- API-key provider registry
+- direct ASR, LLM, and TTS APIs
+- mock and OpenAI-compatible provider clients
+- device bootstrap and compatibility WebSocket path
+- AgenDash-style voice WebSocket path
+- debug trace store and debug trace UI
+- local smoke runner in `cmd/agensense-smoke`
+- Dockerfile and Docker Compose local deployment example
+- LocalAI default provider configuration
 
-不要再把项目只理解成“设备网关”。
+## Keep In Git
 
-## 当前代码已经有什么
+Keep:
 
-### 入口和存储
+- `cmd/agensense-smoke`: source code for end-to-end regression, not a generated artifact
+- `*_test.go`: Go test files required for CI and safe refactors
+- `Dockerfile`, `compose.yaml`, and `scripts/*.sh`: reproducible local deployment workflow
 
-- `cmd/agensense/main.go`
-- `internal/store/file_repository.go`
+Do not commit:
 
-当前第一版是单进程 + 本地 JSON store。
+- `tmp/`
+- built binaries
+- logs
+- local JSON state
+- provider keys or `.env` files
 
-### HTTP API
+## Validation
 
-- `GET /healthz`
-- `POST /v1/bootstrap`
-- `GET /v1/device/config`
-- `POST /v1/device/telemetry`
-- `GET /v1/session/ws`
-- `GET/POST /v1/providers`
-- `GET/PATCH /v1/providers/{id}`
-- `POST /v1/asr/transcribe`
-- `POST /v1/llm/chat`
-- `POST /v1/tts/synthesize`
+Before publishing changes:
 
-### 关键服务
+```sh
+go test ./...
+go build ./cmd/agensense
+go run ./cmd/agensense-smoke
+```
 
-- `internal/service/provider_registry.go`
-  - 负责把 `AGENSENSE_API_KEY` 映射成稳定 namespace
-  - 在 namespace 下存取 provider profile
-  - 支持默认 profile 解析
-- `internal/service/inference.go`
-  - 提供 direct-use ASR / LLM / TTS
-- `internal/provider/factory.go`
-  - 根据 provider profile 构造 mock 或 OpenAI 兼容 provider client
-- `internal/provider/openai_compatible.go`
-  - 已经接上 OpenAI 兼容 ASR / LLM / TTS HTTP 接口
+The smoke runner requires the service to be running.
 
-### 设备兼容链路
+## Documentation Rules
 
-- `internal/gateway`
-- `internal/protocol`
-- `internal/session`
+- Default docs are English.
+- Chinese docs are preserved under `docs/zh-CN`.
+- Use `AgenSense` in prose.
+- Keep binary paths, package names, env vars, and commands lowercase where required.
+- Update `docs/SUMMARY.md` when adding public docs.
+- Update `docs/zh-CN/SUMMARY.md` when adding Chinese i18n docs.
 
-当前设备 WebSocket 语音链路还是接 mock pipeline，主要用于协议验证。不要误以为它已经自动复用了 provider registry。
+## Next Engineering Steps
 
-## 当前边界
+Recommended order:
 
-第一版已经明确支持：
+1. Add CI for `go test ./...` and `go build ./cmd/agensense`.
+2. Add encrypted credential storage or a secret-provider abstraction.
+3. Add provider health checks.
+4. Add timeout, retry, and fallback policies around provider calls.
+5. Add metrics for provider latency and voice session state.
+6. Decide whether the file store is enough or a database adapter is needed.
+7. Align the legacy device WebSocket path with the provider registry.
 
-- API key 维度的 provider profile 注册和复用
-- `mock://` provider
-- OpenAI 兼容 provider
-- direct-use ASR / LLM / TTS API
-- 设备 bootstrap / WebSocket 协议
+## Risk Notes
 
-第一版明确还没做：
-
-- VAD 运行时接口
-- provider 凭据加密存储
-- provider 健康检查与主动保活
-- 设备 WebSocket 语音链路切换到 registry/factory
-- 多 API key 管理后台
-- 审计、配额、细粒度限流
-
-## 继续开发时的优先级
-
-### 1. 先补共享服务，不要先做后台
-
-优先级建议：
-
-1. VAD 运行时接口
-2. provider 健康检查
-3. provider 凭据的更安全存储
-4. direct-use API 的审计和限流
-
-### 2. 再决定设备链路是否要切到统一编排
-
-如果 `Agendash` 和其他 GUI 客户端主要走 direct-use API，那么设备 WebSocket 链路可以继续保留为兼容模式。
-
-如果后面要让硬件设备也走真实 provider，而不是 mock pipeline，再把 `internal/gateway` 里的音频回路切到 `RegistryService + Factory`。
-
-### 3. 不要过早引入重基础设施
-
-当前先不要：
-
-- 先拆微服务
-- 先上消息队列
-- 先做完整后台管理 UI
-- 先做多协议大战
-
-## 开发约束
-
-- 业务层不要直接拼 OpenAI 兼容请求
-- provider 访问统一走 `ASRClient` / `LLMClient` / `TTSClient`
-- direct-use API 不强依赖 `device_id`
-- 新增字段时优先考虑 API key namespace 语义，而不是硬件实体语义
-- 文档统一使用“第一版”表述，不再另起所谓 `v2`
+- Provider credentials are currently stored in local JSON as plain text.
+- The local store is not safe for multi-node deployment.
+- The legacy device WebSocket path still uses the mock pipeline.
+- Docker Compose is a local example, not a production topology.
+- The default LocalAI model IDs must exist in the target LocalAI instance or be overridden with env vars.

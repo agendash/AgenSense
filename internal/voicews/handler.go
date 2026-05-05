@@ -5,10 +5,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agendash/agensense/internal/debugtrace"
-	"github.com/agendash/agensense/internal/gateway/wsconn"
-	"github.com/agendash/agensense/internal/provider"
-	"github.com/agendash/agensense/internal/service"
+	"github.com/agendash/AgenSense/internal/debugtrace"
+	"github.com/agendash/AgenSense/internal/gateway/wsconn"
+	"github.com/agendash/AgenSense/internal/provider"
+	"github.com/agendash/AgenSense/internal/service"
 )
 
 // Handler serves the direct-use full-duplex voice websocket session.

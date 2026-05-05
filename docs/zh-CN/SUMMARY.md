@@ -1,0 +1,15 @@
+# 目录
+
+* [概览](README.md)
+* [架构设计](architecture.md)
+* [Provider API](provider-api.md)
+* [本地运行手册](mvp-local-runbook.md)
+* [部署](deployment.md)
+* [LocalAI 配置](localai.md)
+* [设备 Bootstrap](device-bootstrap.md)
+* [实时协议](protocol.md)
+* [高可用与部署建议](deployment-ha.md)
+* [开源方案参考](open-source-options.md)
+* [路线图](roadmap.md)
+* [开发交接](dev-handoff.md)
+* [English Docs](../README.md)

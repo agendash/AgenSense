@@ -8,9 +8,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/agendash/agensense/internal/debugtrace"
-	"github.com/agendash/agensense/internal/provider"
-	"github.com/agendash/agensense/internal/voicelang"
+	"github.com/agendash/AgenSense/internal/debugtrace"
+	"github.com/agendash/AgenSense/internal/provider"
+	"github.com/agendash/AgenSense/internal/voicelang"
 )
 
 // Action is a provider-agnostic device action emitted by the orchestration flow.

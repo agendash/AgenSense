@@ -1,15 +1,24 @@
-# deploy
+# Deploy
 
-这个目录目前只应该放两类东西：
+This directory is reserved for deployment-adjacent assets that are not part of the service runtime.
 
-- 本地 MVP 的非代码辅助资产，例如 smoke helper、示例请求、演示脚本
-- 主线程集成完成之后，已经被实际验证过的部署样例
+Current deployment entrypoints live at the repository root:
 
-这轮本地 MVP 明确不要求：
+- `Dockerfile`
+- `compose.yaml`
+- `compose.localai.yaml`
+- `scripts/run-local.sh`
+- `scripts/smoke-local.sh`
+- `scripts/docker-local.sh`
+- `scripts/localai-up.sh`
 
-- `docker compose`
-- `systemd unit`
-- k8s manifests
-- edge relay 部署脚本
+See [docs/deployment.md](../docs/deployment.md).
 
-当前仓库已经有本地单进程 MVP，但还没有实际验证过的 `docker compose`、`systemd` 或 k8s 资产，所以这个目录暂时继续保持克制。
+Future deploy assets may include:
+
+- systemd units
+- launchd plists
+- Kubernetes manifests
+- production reverse-proxy examples
+
+Only commit deploy assets after they have been exercised locally or documented as examples.

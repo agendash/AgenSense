@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/agendash/agensense/internal/device"
+	"github.com/agendash/AgenSense/internal/device"
 )
 
 // Factory resolves provider clients from a stored profile.

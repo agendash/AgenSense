@@ -8,17 +8,17 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/agendash/agensense/internal/app"
-	"github.com/agendash/agensense/internal/debugtrace"
-	"github.com/agendash/agensense/internal/device"
-	"github.com/agendash/agensense/internal/gateway"
-	"github.com/agendash/agensense/internal/httpapi"
-	"github.com/agendash/agensense/internal/observability"
-	"github.com/agendash/agensense/internal/provider"
-	"github.com/agendash/agensense/internal/service"
-	"github.com/agendash/agensense/internal/session"
-	"github.com/agendash/agensense/internal/store"
-	"github.com/agendash/agensense/internal/voicews"
+	"github.com/agendash/AgenSense/internal/app"
+	"github.com/agendash/AgenSense/internal/debugtrace"
+	"github.com/agendash/AgenSense/internal/device"
+	"github.com/agendash/AgenSense/internal/gateway"
+	"github.com/agendash/AgenSense/internal/httpapi"
+	"github.com/agendash/AgenSense/internal/observability"
+	"github.com/agendash/AgenSense/internal/provider"
+	"github.com/agendash/AgenSense/internal/service"
+	"github.com/agendash/AgenSense/internal/session"
+	"github.com/agendash/AgenSense/internal/store"
+	"github.com/agendash/AgenSense/internal/voicews"
 )
 
 func main() {

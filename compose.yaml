@@ -1,0 +1,33 @@
+services:
+  agensense:
+    build:
+      context: .
+    image: agendash/agensense:local
+    ports:
+      - "8080:8080"
+    environment:
+      AGENSENSE_ADDR: ":8080"
+      AGENSENSE_PUBLIC_BASE_URL: "http://127.0.0.1:8080"
+      AGENSENSE_DATA_DIR: "/data"
+      AGENSENSE_LOG_LEVEL: "info"
+      AGENSENSE_DEBUG: "false"
+      AGENSENSE_DEFAULT_API_KEY: "demo-user-key"
+      AGENSENSE_DEFAULT_PROVIDER_NAME: "LocalAI Default"
+      AGENSENSE_DEFAULT_PROVIDER_BASE_URL: "${AGENSENSE_DEFAULT_PROVIDER_BASE_URL:-http://host.docker.internal:8081/v1}"
+      AGENSENSE_DEFAULT_PROVIDER_API_KEY: "${AGENSENSE_DEFAULT_PROVIDER_API_KEY:-}"
+      AGENSENSE_DEFAULT_ASR_MODEL: "${AGENSENSE_DEFAULT_ASR_MODEL:-whisper-1}"
+      AGENSENSE_DEFAULT_LLM_MODEL: "${AGENSENSE_DEFAULT_LLM_MODEL:-gemma-4-e2b-it}"
+      AGENSENSE_DEFAULT_TTS_MODEL: "${AGENSENSE_DEFAULT_TTS_MODEL:-tts-1}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - agensense-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  agensense-data:

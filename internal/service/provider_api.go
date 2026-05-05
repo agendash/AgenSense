@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 
-	"github.com/agendash/agensense/internal/provider"
+	"github.com/agendash/AgenSense/internal/provider"
 )
 
 // ProviderProfileRequest is the user-facing provider profile payload.

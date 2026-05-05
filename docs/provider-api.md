@@ -1,28 +1,29 @@
 # Provider API
 
-这份文档描述 `agensense` 第一版里的 API key 模式：如何注册 provider profile，如何在后续请求中直接复用这些配置。
+The provider API is the primary shared-service interface for AgenSense. It lets clients register reusable upstream model profiles and then call ASR, LLM, and TTS without embedding provider-specific code in every client.
 
-## 目标
+## Authentication
 
-`agensense` 现在既是设备兼容网关，也是共享 AI 感知服务。
-
-对于 `Agendash`、`Agenleash` 和其他非 agen 系客户端，推荐优先使用 API key 模式，而不是设备 bootstrap 模式。
-
-这条模式不要求客户端是硬件设备，也不要求提供 `device_id`。如果上层想带上自己的标识，可以通过 `client_id`、`device_label` 和 `session_id` 传入；其中 `device_label` 推荐放 `MacOS`、`Android`、`Web` 这类方便调试的客户端类型。
-
-## 鉴权
-
-所有 provider registry 和直接调用接口都使用：
+Provider registry and direct inference endpoints use:
 
 ```http
 Authorization: Bearer <AGENSENSE_API_KEY>
 ```
 
-这里的 `AGENSENSE_API_KEY` 代表一个调用方的身份边界。服务端不会直接保存原始 key，而是把它映射成稳定 namespace，用于隔离该调用方的 provider 配置。
+The API key maps to a stable internal namespace. The raw API key is not stored.
 
-## Provider Profile 存储
+By default, AgenSense seeds the `demo-user-key` namespace with a LocalAI-oriented default provider:
 
-当前支持的 provider 字段：
+- base URL: `http://127.0.0.1:8081/v1`
+- ASR model: `whisper-1`
+- LLM model: `gemma-4-e2b-it`
+- TTS model: `tts-1`
+
+See [LocalAI setup](localai.md) for the recommended local address layout.
+
+## Provider Profiles
+
+Supported fields:
 
 - `asr_base_url`
 - `asr_api_key`
@@ -36,15 +37,11 @@ Authorization: Bearer <AGENSENSE_API_KEY>
 - `vad_base_url`
 - `vad_api_key`
 
-这些配置会持久化到本地 `state.json` 中的 `provider_profiles`。
+Provider credentials are currently persisted as plain text in the local JSON store. Treat the first implementation as local-dev or trusted single-node infrastructure.
 
-当前第一版里，上游 provider 的 `api_key` 会按原值保存在本地 JSON store。`AGENSENSE_API_KEY` 自身不会直接入库，而是先映射成稳定 namespace。
+## Register A Provider
 
-## 注册 Provider
-
-### `POST /v1/providers`
-
-请求体示例：
+`POST /v1/providers`
 
 ```json
 {
@@ -63,31 +60,29 @@ Authorization: Bearer <AGENSENSE_API_KEY>
 }
 ```
 
-行为：
+Behavior:
 
-- 如果 `id` 不存在，则创建
-- 如果 `id` 已存在，则覆盖更新
-- 如果 `default=true`，则把它设为当前 API key namespace 下的默认 profile
+- creates the profile when `id` does not exist
+- replaces the profile when `id` already exists
+- makes the profile the namespace default when `default=true`
 
-## 查询 Provider
+## Query Providers
 
-### `GET /v1/providers`
+`GET /v1/providers`
 
-返回当前 API key namespace 下的所有 provider profiles。
+Returns all provider profiles in the current API-key namespace.
 
-### `GET /v1/providers/{id}`
+`GET /v1/providers/{id}`
 
-返回单个 provider profile。
+Returns one provider profile.
 
-### `PATCH /v1/providers/{id}`
+`PATCH /v1/providers/{id}`
 
-按相同结构更新单个 provider profile。
+Updates one provider profile.
 
-## 直接调用 API
+## Direct ASR
 
-### `POST /v1/asr/transcribe`
-
-请求体示例：
+`POST /v1/asr/transcribe`
 
 ```json
 {
@@ -104,7 +99,7 @@ Authorization: Bearer <AGENSENSE_API_KEY>
 }
 ```
 
-响应体示例：
+Response:
 
 ```json
 {
@@ -113,9 +108,9 @@ Authorization: Bearer <AGENSENSE_API_KEY>
 }
 ```
 
-### `POST /v1/llm/chat`
+## Direct LLM
 
-请求体示例：
+`POST /v1/llm/chat`
 
 ```json
 {
@@ -123,35 +118,20 @@ Authorization: Bearer <AGENSENSE_API_KEY>
   "client_id": "agendash-desktop",
   "device_label": "MacOS",
   "session_id": "voice-001",
+  "messages": [
+    {"role": "system", "content": "You are concise."},
+    {"role": "user", "content": "hello"}
+  ],
   "voice_assistant": {
     "contract": "universal_voice_layer_v1",
     "ui_context": {
-      "current_scene": "chat",
-      "focused_object": {
-        "id": "session-alpha",
-        "kind": "agent_session",
-        "label": "alpha"
-      }
-    },
-    "assistant_intent": {
-      "scope": "focused_object",
-      "target_id": "session-alpha",
-      "action": "set_composer",
-      "args": {"content": "hello"},
-      "requires_confirmation": false,
-      "ui_surface": "anchored_input"
+      "current_scene": "chat"
     }
-  },
-  "messages": [
-    {"role": "system", "content": "You are a concise assistant."},
-    {"role": "user", "content": "hello"}
-  ]
+  }
 }
 ```
 
-`voice_assistant`、`ui_context`、`assistant_intent` 和 `metadata` 都是可选字段。Agendash 桌面端会优先使用嵌套的 `voice_assistant` envelope；为了兼容轻量客户端，也可以把 `ui_context` / `assistant_intent` 放在请求顶层。当前直接 LLM API 不会隐式改写 `messages`，客户端仍应把希望模型看到的上下文写入 messages；Agensense 会保存这些字段用于 trace 和协议对齐。
-
-响应体示例：
+Response:
 
 ```json
 {
@@ -161,9 +141,11 @@ Authorization: Bearer <AGENSENSE_API_KEY>
 }
 ```
 
-### `POST /v1/tts/synthesize`
+`voice_assistant`, `ui_context`, `assistant_intent`, and `metadata` are optional. AgenSense records them for traceability and protocol alignment, but it does not implicitly rewrite `messages`.
 
-请求体示例：
+## Direct TTS
+
+`POST /v1/tts/synthesize`
 
 ```json
 {
@@ -180,7 +162,7 @@ Authorization: Bearer <AGENSENSE_API_KEY>
 }
 ```
 
-响应体示例：
+Response:
 
 ```json
 {
@@ -190,41 +172,19 @@ Authorization: Bearer <AGENSENSE_API_KEY>
     "sample_rate_hz": 16000,
     "channels": 1
   },
-  "audio_base64": "....",
+  "audio_base64": "...",
   "chunk_count": 3
 }
 ```
 
-## Provider 选择规则
+Some OpenAI-compatible TTS services return a WAV container even when PCM is requested. AgenSense detects WAV headers and reports `format.codec=wav`.
 
-每次调用 direct-use API 时：
+## Provider Selection
 
-1. 如果请求明确带了 `provider_profile_id`，优先使用它
-2. 否则尝试使用当前 API key namespace 下的默认 profile
-3. 如果没有默认 profile 但仅存在一个 profile，则自动使用它
-4. 如果存在多个 profile 且没有默认值，也没有显式指定，则返回错误
+For each direct inference request, AgenSense resolves the provider in this order:
 
-第一版默认启动时，会为 `demo-user-key` 对应 namespace 自动补齐 `default`。如果当前默认值还是旧的 `mock-default`，启动时也会自动切过去；已经显式切到其他 profile 的 namespace 不会被覆盖。
+1. explicit `provider_profile_id`
+2. namespace default profile
+3. the only available profile in the namespace
 
-## 当前支持的 Provider 类型
-
-当前第一版支持：
-
-- `mock://...`
-- OpenAI 兼容 HTTP provider
-
-其中：
-
-- ASR：调用 `/audio/transcriptions`
-- LLM：调用 `/chat/completions` 的流式输出
-- TTS：调用 `/audio/speech`
-
-## 长连接说明
-
-当前第一版：
-
-- 客户端到 `agensense` 的设备链路可以是长连接 WebSocket
-- 直接调用 API 是普通 HTTP 请求
-- `agensense` 到上游 provider 目前依赖共享 `http.Client` 和 HTTP keep-alive
-- 还没有实现常驻 provider WebSocket / gRPC 连接池
-- 设备兼容模式下的 WebSocket 语音链路当前仍主要用于 mock 协议验证
+If no profile can be selected, the request fails.

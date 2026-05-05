@@ -17,12 +17,12 @@ const (
 	DemoConfigVersion   = int64(1)
 	DemoFirmwareSKU     = "m5cores3-facekit-audio"
 	DemoFirmwareChipID  = "esp32s3-abcdef"
-	DemoProviderName    = "Mock Default"
-	DemoProviderBaseURL = "mock://default"
+	DemoProviderName    = "LocalAI Default"
+	DemoProviderBaseURL = "http://127.0.0.1:8081/v1"
 	DemoProviderAPIKey  = ""
-	DemoASRModel        = "mock-asr"
-	DemoLLMModel        = "mock-llm"
-	DemoTTSModel        = "mock-tts"
+	DemoASRModel        = "whisper-1"
+	DemoLLMModel        = "gemma-4-e2b-it"
+	DemoTTSModel        = "tts-1"
 )
 
 type DemoSeed struct {

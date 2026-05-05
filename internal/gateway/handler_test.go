@@ -19,13 +19,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agendash/agensense/internal/device"
-	"github.com/agendash/agensense/internal/httpapi"
-	"github.com/agendash/agensense/internal/protocol"
-	"github.com/agendash/agensense/internal/provider"
-	"github.com/agendash/agensense/internal/service"
-	"github.com/agendash/agensense/internal/session"
-	"github.com/agendash/agensense/internal/store"
+	"github.com/agendash/AgenSense/internal/device"
+	"github.com/agendash/AgenSense/internal/httpapi"
+	"github.com/agendash/AgenSense/internal/protocol"
+	"github.com/agendash/AgenSense/internal/provider"
+	"github.com/agendash/AgenSense/internal/service"
+	"github.com/agendash/AgenSense/internal/session"
+	"github.com/agendash/AgenSense/internal/store"
 )
 
 func TestGatewayRoundTrip(t *testing.T) {

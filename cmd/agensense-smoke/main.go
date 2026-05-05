@@ -24,7 +24,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agendash/agensense/internal/protocol"
+	"github.com/agendash/AgenSense/internal/protocol"
 )
 
 const (

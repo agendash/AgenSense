@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agendash/agensense/internal/device"
+	"github.com/agendash/AgenSense/internal/device"
 )
 
 type timeNowFunc func() time.Time

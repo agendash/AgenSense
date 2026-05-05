@@ -1,62 +1,53 @@
 # Roadmap
 
-## Milestone 0
+## Milestone 0: Documentation And Contracts
 
-文档先行，明确协议和边界。
+- Keep API and protocol docs aligned with the implementation.
+- Preserve Chinese docs under `docs/zh-CN` as the i18n source.
+- Keep English docs as the default public documentation.
 
-## Milestone 1
+## Milestone 1: Shared Service Mode
 
-先把共享服务模式打稳：
+- API-key namespace isolation
+- provider profile registration and default selection
+- direct ASR, LLM, and TTS APIs
+- local JSON persistence
 
-- API key namespace
-- provider profile 注册 / 查询 / 默认值
-- direct-use ASR / LLM / TTS API
-- 本地 JSON store 持久化
-
-## Milestone 2
-
-保留设备兼容模式：
+## Milestone 2: Device Compatibility
 
 - bootstrap
-- device config / telemetry
+- device config and telemetry
 - `hello`
 - `telemetry.update`
-- `audio.start` / binary / `audio.stop`
+- `audio.start`, binary audio, and `audio.stop`
 - `config.snapshot`
 - `action.execute`
 
-## Milestone 3
+## Milestone 3: Provider Runtime
 
-把 provider runtime 做完整：
+- VAD runtime client
+- provider health checks
+- retry, timeout, and circuit breaker policy
+- fallback profile orchestration
 
-- VAD runtime
-- provider 健康检查
-- retry / timeout / breaker
-- direct-use API 的更稳定编排
+## Milestone 4: Production Readiness
 
-## Milestone 4
+- encrypted credential storage
+- audit logs
+- metrics
+- quota and rate limiting
+- durable shared store option
 
-补齐生产必需项：
+## Milestone 5: Client And Device Integrations
 
-- 凭据安全存储
-- 审计日志
-- 指标
-- 配额 / 限流
+- AgenDash
+- AgenLeash
+- third-party service clients
+- hardware devices through the compatibility path
 
-## Milestone 5
+## Milestone 6: Edge Deployment
 
-扩展接入面：
-
-- `Agendash`
-- `Agenleash`
-- 第三方非 agen 客户端
-- 硬件设备继续兼容接入
-
-## Milestone 6
-
-边缘部署能力：
-
-- ARM64 打包
-- 低配 relay 模式
-- 配置缓存
-- 可控降级
+- ARM64 builds
+- lightweight relay mode
+- config cache
+- controlled degradation when upstream providers are unavailable

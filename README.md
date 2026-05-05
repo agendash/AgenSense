@@ -1,46 +1,43 @@
-# agensense
+# AgenSense
 
-面向 `Agendash`、`Agenleash` 以及其他非 agen 客户端的可复用 AI 感知服务。
+Reusable AI sensing gateway for AgenDash, AgenLeash, hardware devices, and other clients.
 
-它的目标不是把 LLM / ASR / TTS / VAD 跑在设备上，而是提供一层统一的网关与控制面，把不同模型服务收敛成一套稳定的协议和存储模型，供 GUI、硬件端和其他服务复用。
+AgenSense does not run LLM, ASR, TTS, or VAD models on edge devices by default. It provides a stable gateway, provider registry, direct inference API, and device-compatible voice protocol so clients can share the same model configuration and runtime behavior.
 
-## 当前定位
+Chinese documentation is available in [README.zh-CN.md](README.zh-CN.md).
 
-`agensense` 现在同时支持两种接入方式：
+## Status
 
-- **共享服务模式**：客户端使用 `Authorization: Bearer <AGENSENSE_API_KEY>` 注册 provider profile，并直接调用 ASR / LLM / TTS API
-- **设备兼容模式**：保留原有 `bootstrap + device token + WebSocket` 路径，兼容 ESP32 / M5Stack / HID 类设备
+AgenSense is currently a local-first Go service with two supported access paths:
 
-第一种模式是现在推荐的主路径；第二种模式保留给硬件接入和本地 MVP 验证。
+- Shared service mode: clients use `Authorization: Bearer <AGENSENSE_API_KEY>` to register provider profiles and call ASR, LLM, and TTS APIs directly.
+- Device compatibility mode: devices use bootstrap, device tokens, and a WebSocket voice session for ESP32/M5Stack/HID-style integrations.
 
-## 当前状态
+The shared service mode is the preferred path for desktop, GUI, service, and third-party clients. The device path remains useful for hardware integration and protocol regression.
 
-到当前这个 checkout 为止，已经落下来的内容主要有：
+## Features
 
-- `cmd/agensense`：单进程可执行入口
-- `internal/httpapi`：
-  - `GET /healthz`
+- Single-binary Go service under `cmd/agensense`
+- File-backed local JSON store under `AGENSENSE_DATA_DIR`
+- API-key namespace isolation for provider profiles
+- Direct APIs:
+  - `POST /v1/asr/transcribe`
+  - `POST /v1/llm/chat`
+  - `POST /v1/tts/synthesize`
+- Provider support:
+  - `mock://` provider for local development
+  - OpenAI-compatible ASR, LLM, and TTS clients
+- Device compatibility APIs:
   - `POST /v1/bootstrap`
   - `GET /v1/device/config`
   - `POST /v1/device/telemetry`
   - `GET /v1/session/ws`
-  - `GET/POST /v1/providers`
-  - `GET/PATCH /v1/providers/{id}`
-  - `POST /v1/asr/transcribe`
-  - `POST /v1/llm/chat`
-  - `POST /v1/tts/synthesize`
-- `internal/gateway`：设备 WebSocket 会话、`hello`、`audio.start` / binary / `audio.stop`
-- `internal/protocol`：统一 `payload` envelope、事件类型和单流 `last_seq` 规则
-- `internal/provider`：
-  - `mock://` provider
-  - OpenAI 兼容 ASR / LLM / TTS 客户端
-- `internal/device` + `internal/store`：provider profile、设备模型、token 逻辑、单文件 JSON 持久化 store
+- Voice WebSocket path for AgenDash-style realtime voice sessions:
+  - `GET /v1/voice/ws`
+- Optional debug trace UI:
+  - `GET /debug/traces`
 
-这意味着仓库现在已经不只是“设备网关 MVP”，也已经具备了共享 AI 感知服务的一版骨架。
-
-## 本地验收入口
-
-下面这些命令现在都应该通过：
+## Quick Start
 
 ```sh
 go test ./...
@@ -48,118 +45,39 @@ go build ./cmd/agensense
 go run ./cmd/agensense
 ```
 
-如果要脱离 `Agendash` 验证 voice mode 的全链路，可以在服务启动后跑：
+The service listens on `127.0.0.1:8080` by default.
 
 ```sh
-go run ./cmd/agensense-smoke
+curl -sS http://127.0.0.1:8080/healthz
 ```
 
-这个 smoke runner 默认会先调用 `/v1/tts/synthesize` 生成一段测试语音，再把这段音频按麦克风流模拟 `Agendash` 发送到 `/v1/voice/ws`，并校验 `VAD -> ASR -> LLM delta -> TTS binary`。如果服务端设置了 `AGENSENSE_DEBUG=true`，smoke 也会校验 debug trace 和音频资产。默认会创建一个独立的 `smoke-mock` provider profile，避免被本机真实 provider 状态干扰；如果要测真实 provider，可以关掉 `-ensure-mock-provider`。
+The default provider profile points at a local LocalAI server:
 
-如果还要把识别结果继续打到本机 `Agenleash`，启动 code agent 并验证 workspace API，可以加：
+- API key: `demo-user-key`
+- profile id: `default`
+- base URL: `http://127.0.0.1:8081/v1`
+- models: `whisper-1`, `gemma-4-e2b-it`, `tts-1`
 
-```sh
-go run ./cmd/agensense-smoke \
-  -agenleash-base-url=http://127.0.0.1:8081 \
-  -agenleash-token=<AGENLEASH_TOKEN> \
-  -agenleash-workspace="$(pwd)"
-```
+AgenSense uses port `8080`, so the documented LocalAI host port is `8081`. Inside the optional Docker Compose full stack, AgenSense reaches LocalAI at `http://localai:8080/v1`.
 
-更具体的启动、provider 注册和 WebSocket 验证步骤见：
-
-- [`docs/mvp-local-runbook.md`](docs/mvp-local-runbook.md)
-- [`docs/provider-api.md`](docs/provider-api.md)
-
-## Debug 后台
-
-默认关闭。启动服务时显式设置 `AGENSENSE_DEBUG=true` 后，可以打开：
-
-- `http://127.0.0.1:8080/debug/traces`
-
-这个页面会显示最近的 trace，并提供对应的 JSON / 音频资产接口：
-
-- `GET /debug/api/traces`
-- `GET /debug/api/traces/{id}`
-- `GET /debug/assets/{id}/input.wav`
-- `GET /debug/assets/{id}/tts.wav`
-
-当前会记录的内容包括：
-
-- 输入音频
-- ASR 文本与耗时
-- 发给 LLM 的 messages
-- LLM deltas、首字延迟、完整返回文本
-- TTS 输入文本、首包延迟、输出音频
-- 整轮 timeline
-
-这套 debug 后台主要用于排查“为什么只听到零碎 TTS”“为什么首字很慢”“到底是哪一段阻塞了”这类问题。
-
-`AGENSENSE_DEBUG` 只控制 trace 后台与音频资产采集；`AGENSENSE_LOG_LEVEL=debug` 只控制日志详细程度。
-
-## 默认运行参数
-
-默认情况下：
-
-- 监听地址：`127.0.0.1:8080`
-- `AGENSENSE_ADDR`：覆盖监听地址
-- `AGENSENSE_PUBLIC_BASE_URL`：覆盖 bootstrap 返回的 `ws_url`
-- `AGENSENSE_DATA_DIR`：覆盖本地 JSON store 目录，默认是 `tmp/agensense`
-- `AGENSENSE_LOG_LEVEL`：日志级别，支持 `debug`、`info`、`warn`、`error`
-- `AGENSENSE_DEBUG=true`：打开 `/debug/*` trace 后台与音频资产采集，默认关闭
-- `AGENSENSE_DISABLE_DEMO_SEED=true`：关闭默认 demo 设备 seed
-
-启动时还会自动确保一套共享服务默认 provider：
-
-- 默认 API key namespace：`demo-user-key`
-- 默认 profile id：`default`
-- 默认上游：`mock://default`
-- 默认模型：
-  - ASR：`mock-asr`
-  - LLM：`mock-llm`
-  - TTS：`mock-tts`
-
-如果当前 namespace 还没有默认 profile，或者默认值仍然停在旧的 `mock-default`，启动时会自动切到这套内置 mock 配置。已经显式切到其他 profile 的 namespace 不会被强制覆盖。
-
-日志当前输出到标准输出，默认覆盖：
-
-- 进程启动与停止
-- HTTP 请求
-- provider 注册和直接调用
-- 设备 bootstrap 与设备鉴权
-- WebSocket 会话建立与关键事件
-- mock / provider 调用开始与完成
-
-原始音频帧不会逐条打印。
-
-## 共享服务模式怎么用
-
-### 1. 选择一个 API key
-
-客户端自行持有一个 API key，并在请求时通过：
-
-```sh
-Authorization: Bearer <AGENSENSE_API_KEY>
-```
-
-访问 `agensense`。
-
-同一个 API key 对应一个稳定的内部 namespace。注册过的 provider profile 会被持久化到这个 namespace 下，后续同一 API key 可直接复用。
-
-这里的“客户端”不要求是硬件设备，也不要求提前分配 `device_id`。对 `Agendash`、`Agenleash` 或其他普通 GUI / 服务调用方来说，只需要持有一个 API key 即可。
-
-### 2. 注册 provider profile
-
-对于默认的 `demo-user-key`，服务启动后就会直接带上一套 `default`。如果你只是想直接使用，可以先查询：
+## Direct Inference
 
 ```sh
 export AGENSENSE_API_KEY="demo-user-key"
 
 curl -sS \
-  http://127.0.0.1:8080/v1/providers \
-  -H "Authorization: Bearer ${AGENSENSE_API_KEY}"
+  -X POST http://127.0.0.1:8080/v1/llm/chat \
+  -H "Authorization: Bearer ${AGENSENSE_API_KEY}" \
+  -H 'content-type: application/json' \
+  -d '{
+    "messages":[
+      {"role":"system","content":"You are concise."},
+      {"role":"user","content":"hello"}
+    ]
+  }'
 ```
 
-如果你要覆盖它，再调用注册接口即可。示例：
+To point AgenSense at an OpenAI-compatible upstream, register a provider profile:
 
 ```sh
 export AGENSENSE_API_KEY="demo-user-key"
@@ -186,103 +104,83 @@ curl -sS \
   }'
 ```
 
-### 3. 直接调用 ASR / LLM / TTS
+Provider credentials are currently stored in the local JSON store. Use this mode for local development or trusted single-node deployments until encrypted credential storage is added.
 
-注册一次后，后续可以直接使用：
+## Smoke And Tests
 
-- `POST /v1/asr/transcribe`
-- `POST /v1/llm/chat`
-- `POST /v1/tts/synthesize`
+Keep these in Git:
 
-这些接口默认会：
+- `cmd/agensense-smoke`: source-controlled end-to-end smoke runner for voice WebSocket, ASR, LLM, TTS, and optional AgenLeash workspace checks.
+- `*_test.go`: normal Go unit and integration tests. These are required for safe changes and should stay in the repository.
 
-- 优先使用请求里指定的 `provider_profile_id`
-- 未指定时尝试使用该 API key 下的默认 profile
-- 若没有默认 profile 且只存在一个 profile，则自动选中它
+Generated smoke artifacts are written under `tmp/smoke/...`; `tmp/` is ignored and should not be committed.
 
-### 4. 关于长连接
+Run the smoke runner after the service is up:
 
-- `agensense` 当前会保持**客户端到服务端**的设备 WebSocket 长连接
-- 对上游 ASR / LLM / TTS provider，当前第一版使用共享 `http.Client` 做请求复用，依赖 HTTP keep-alive
-- 当前没有实现专门的“常驻 provider WebSocket / gRPC 长连接池”
-- provider profile 中保存的上游 `api_key` / `base_url` 当前会持久化到本地 `state.json`
+```sh
+go run ./cmd/agensense-smoke
+```
 
-## 设备兼容模式怎么用
+## Deployment
 
-设备兼容模式仍然保留：
+Local scripts:
 
-- `POST /v1/bootstrap`
-- `GET /v1/device/config`
-- `POST /v1/device/telemetry`
-- `GET /v1/session/ws`
+```sh
+./scripts/run-local.sh
+./scripts/smoke-local.sh
+```
 
-这条路径适合：
+Docker Compose:
 
-- ESP32 / M5Stack / HID 设备接入
-- 本地 mock-friendly 语音链路验收
-- 需要 `audio.start` / binary / `audio.stop` 的设备协议场景
+```sh
+docker compose up --build
+```
 
-当前第一版里，这条设备兼容路径仍然主要接在 mock pipeline 上，用来验证协议、音频帧和事件流；真正按 API key namespace 选 provider 并直接调用上游模型，优先走共享服务 API。
+Full local stack with LocalAI:
 
-默认 demo 设备：
+```sh
+./scripts/localai-up.sh
+```
 
-- `device_id`: `vdk-coreS3-001`
-- `claim_token`: `factory-claim-token`
-- `chip_id`: `esp32s3-abcdef`
-- `hardware_sku`: `m5cores3-facekit-audio`
-- `provider_profile_id`: `default`
+See [docs/deployment.md](docs/deployment.md) for binary, shell script, and Docker Compose workflows.
+See [docs/localai.md](docs/localai.md) for LocalAI setup and model-name expectations.
 
-如果你不需要这条模式，可以用 `AGENSENSE_DISABLE_DEMO_SEED=true` 关闭默认 seed。
+## Configuration
 
-## 第一版的边界
+Common environment variables:
 
-当前第一版已经支持：
+- `AGENSENSE_ADDR`: listen address, default `:8080`
+- `AGENSENSE_PUBLIC_BASE_URL`: public base URL used in device bootstrap responses
+- `AGENSENSE_DATA_DIR`: state, logs, and debug trace data directory
+- `AGENSENSE_LOG_LEVEL`: `debug`, `info`, `warn`, or `error`
+- `AGENSENSE_DEBUG=true`: enables `/debug/*` trace UI and audio assets
+- `AGENSENSE_DISABLE_DEMO_SEED=true`: disables the built-in demo device seed
+- `AGENSENSE_DEFAULT_PROVIDER_BASE_URL`: default provider base URL, default `http://127.0.0.1:8081/v1`
+- `AGENSENSE_DEFAULT_PROVIDER_API_KEY`: default upstream provider API key
 
-- 基于 API key 的 provider profile 注册和持久化
-- 基于 API key 的直接 ASR / LLM / TTS 调用
-- 设备兼容模式的 bootstrap + WebSocket 会话
-- `mock://` provider
-- OpenAI 兼容 ASR / LLM / TTS provider
+## Documentation
 
-当前第一版暂未补齐：
+- [Provider API](docs/provider-api.md)
+- [Local runbook](docs/mvp-local-runbook.md)
+- [Architecture](docs/architecture.md)
+- [Device bootstrap](docs/device-bootstrap.md)
+- [Realtime protocol](docs/protocol.md)
+- [Deployment](docs/deployment.md)
+- [LocalAI setup](docs/localai.md)
+- [HA deployment notes](docs/deployment-ha.md)
+- [Roadmap](docs/roadmap.md)
+- [Developer handoff](docs/dev-handoff.md)
 
-- VAD 运行时调用接口
-- 多 API key 管理后台
-- provider 健康检查和主动保活
-- 更细粒度的配额、审计和限流
-- 设备 WebSocket 语音链路与 provider registry 的统一编排
+## Repository Layout
 
-## 核心定位
-
-- 客户端 / 设备侧保留轻量能力：音频采集、UI、按键 / 触摸 / HID、网络接入
-- `agensense` 统一处理：provider 配置存储、API key 隔离、ASR / LLM / TTS 编排、设备协议兼容
-- 模型侧全部远程化：可以接 mock、OpenAI 兼容 API、自建 ASR / TTS / LLM 服务
-
-## 为什么单独拆一个项目
-
-如果每个客户端都直接各自配置 `ASR URL + LLM URL + TTS URL`，长期会遇到几个问题：
-
-- provider 配置分散在各客户端，难以统一维护
-- 切换后端或增加模型路由时，所有客户端都要改
-- 多客户端、多硬件场景下，重试、熔断、超时和鉴权会重复实现
-- `Agendash`、`Agenleash` 和其他非 agen 系客户端不应该重复造一套感知层
-
-## 长期目标
-
-- 一套统一的共享感知服务接口
-- 一套统一的设备实时协议
-- 支持设备主动 bootstrap / claim / rebind
-- 支持多 provider 适配层，ASR / LLM / TTS / VAD 可混搭
-- 支持边缘 relay 模式，便于以后裁到低配 ARM 设备上跑
-
-## 目录
-
-- [`docs/mvp-local-runbook.md`](docs/mvp-local-runbook.md)：本地运行、provider 注册与设备链路验证
-- [`docs/provider-api.md`](docs/provider-api.md)：API key 模式和 provider API 说明
-- [`docs/architecture.md`](docs/architecture.md)：总体架构方向
-- [`docs/device-bootstrap.md`](docs/device-bootstrap.md)：设备自注册 / 远程配置设计
-- [`docs/protocol.md`](docs/protocol.md)：设备实时协议设计
-- [`docs/deployment-ha.md`](docs/deployment-ha.md)：高可用与部署建议
-- [`docs/open-source-options.md`](docs/open-source-options.md)：可参考或复用的开源方案
-- [`docs/roadmap.md`](docs/roadmap.md)：建议实施顺序
-- [`docs/dev-handoff.md`](docs/dev-handoff.md)：后续开发落地清单
+- `cmd/agensense`: service entrypoint
+- `cmd/agensense-smoke`: local voice smoke runner
+- `internal/httpapi`: HTTP routes and auth entrypoints
+- `internal/voicews`: AgenDash-style voice WebSocket session
+- `internal/gateway`: device compatibility WebSocket session
+- `internal/protocol`: JSON envelope, event types, and stream rules
+- `internal/provider`: mock and OpenAI-compatible provider clients
+- `internal/service`: provider registry, inference orchestration, and device control
+- `internal/store`: file-backed local repository
+- `deploy`: deployment-adjacent notes and examples
+- `scripts`: local run and smoke helper scripts

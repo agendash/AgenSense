@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agendash/agensense/internal/device"
-	"github.com/agendash/agensense/internal/service"
+	"github.com/agendash/AgenSense/internal/device"
+	"github.com/agendash/AgenSense/internal/service"
 )
 
 // EnsureDefaultProviderProfile makes the shared-service default namespace usable

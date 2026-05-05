@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agendash/agensense/internal/device"
-	"github.com/agendash/agensense/internal/service"
+	"github.com/agendash/AgenSense/internal/device"
+	"github.com/agendash/AgenSense/internal/service"
 )
 
 func TestEnsureDefaultProviderProfilePromotesMockDefault(t *testing.T) {
@@ -127,11 +127,11 @@ func LoadTestConfig() Config {
 	return Config{
 		DefaultAPIKey:          "demo-user-key",
 		DefaultProviderID:      "default",
-		DefaultProviderName:    "Mock Default",
-		DefaultProviderBaseURL: "mock://default",
+		DefaultProviderName:    "LocalAI Default",
+		DefaultProviderBaseURL: "http://127.0.0.1:8081/v1",
 		DefaultProviderAPIKey:  "",
-		DefaultASRModel:        "mock-asr",
-		DefaultLLMModel:        "mock-llm",
-		DefaultTTSModel:        "mock-tts",
+		DefaultASRModel:        "whisper-1",
+		DefaultLLMModel:        "gemma-4-e2b-it",
+		DefaultTTSModel:        "tts-1",
 	}
 }

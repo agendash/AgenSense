@@ -9,8 +9,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/agendash/agensense/internal/debugtrace"
-	"github.com/agendash/agensense/internal/service"
+	"github.com/agendash/AgenSense/internal/debugtrace"
+	"github.com/agendash/AgenSense/internal/service"
 )
 
 type fakeControl struct {

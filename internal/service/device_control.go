@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/agendash/agensense/internal/device"
+	"github.com/agendash/AgenSense/internal/device"
 )
 
 // DeviceControl adapts the domain-level device service to the HTTP/WebSocket control-plane contract.

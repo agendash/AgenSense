@@ -1,0 +1,15 @@
+# Summary
+
+* [Overview](README.md)
+* [Architecture](architecture.md)
+* [Provider API](provider-api.md)
+* [Local Runbook](mvp-local-runbook.md)
+* [Deployment](deployment.md)
+* [LocalAI Setup](localai.md)
+* [Device Bootstrap](device-bootstrap.md)
+* [Realtime Protocol](protocol.md)
+* [HA Notes](deployment-ha.md)
+* [Related Open Source Options](open-source-options.md)
+* [Roadmap](roadmap.md)
+* [Developer Handoff](dev-handoff.md)
+* [Chinese Documentation](zh-CN/README.md)

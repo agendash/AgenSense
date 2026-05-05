@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/agendash/agensense/internal/provider"
+	"github.com/agendash/AgenSense/internal/provider"
 )
 
 func TestStoreSegmentsAndDiskAssets(t *testing.T) {

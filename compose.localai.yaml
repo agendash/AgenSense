@@ -1,0 +1,26 @@
+services:
+  agensense:
+    environment:
+      AGENSENSE_DEFAULT_PROVIDER_BASE_URL: "http://localai:8080/v1"
+      AGENSENSE_DEFAULT_PROVIDER_API_KEY: "${LOCALAI_API_KEY:-}"
+    depends_on:
+      localai:
+        condition: service_healthy
+
+  localai:
+    image: localai/localai:latest-cpu
+    ports:
+      - "8081:8080"
+    environment:
+      LOCALAI_API_KEY: "${LOCALAI_API_KEY:-}"
+    volumes:
+      - localai-models:/models
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8080/readyz"]
+      interval: 30s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+volumes:
+  localai-models:

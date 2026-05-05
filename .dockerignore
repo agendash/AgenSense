@@ -1,0 +1,13 @@
+.git
+.butler
+.DS_Store
+.env
+.env.*
+agensense
+bin/
+coverage/
+dist/
+docs/
+tmp/
+skill/
+output/

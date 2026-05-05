@@ -1,13 +1,15 @@
-# internal
+# Internal Packages
 
-这里预留给服务内部模块。
+This directory contains service-internal packages for AgenSense.
 
-建议后续按领域拆包：
+Current package groups:
 
-- `internal/bootstrap`
-- `internal/device`
-- `internal/gateway`
-- `internal/provider`
-- `internal/session`
-- `internal/config`
-- `internal/auth`
+- `internal/app`: runtime configuration and startup helpers
+- `internal/device`: device, token, and provider-profile domain models
+- `internal/gateway`: device compatibility WebSocket gateway
+- `internal/httpapi`: HTTP routes and middleware
+- `internal/provider`: mock and OpenAI-compatible provider clients
+- `internal/service`: application services and orchestration
+- `internal/session`: mock-compatible speech turn pipeline
+- `internal/store`: file-backed repository
+- `internal/voicews`: AgenDash-style realtime voice WebSocket

@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agendash/agensense/internal/gateway/wsconn"
-	"github.com/agendash/agensense/internal/protocol"
-	"github.com/agendash/agensense/internal/provider"
-	"github.com/agendash/agensense/internal/service"
-	"github.com/agendash/agensense/internal/session"
+	"github.com/agendash/AgenSense/internal/gateway/wsconn"
+	"github.com/agendash/AgenSense/internal/protocol"
+	"github.com/agendash/AgenSense/internal/provider"
+	"github.com/agendash/AgenSense/internal/service"
+	"github.com/agendash/AgenSense/internal/session"
 )
 
 // Handler serves the MVP WebSocket gateway protocol.

@@ -8,8 +8,8 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/agendash/agensense/internal/debugtrace"
-	"github.com/agendash/agensense/internal/provider"
+	"github.com/agendash/AgenSense/internal/debugtrace"
+	"github.com/agendash/AgenSense/internal/provider"
 )
 
 // RuntimeInferenceService exposes direct-use ASR / LLM / TTS APIs.

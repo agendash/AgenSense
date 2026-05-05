@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/agendash/agensense/internal/debugtrace"
-	"github.com/agendash/agensense/internal/service"
+	"github.com/agendash/AgenSense/internal/debugtrace"
+	"github.com/agendash/AgenSense/internal/service"
 )
 
 // Router exposes the control-plane HTTP endpoints for the MVP.

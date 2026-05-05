@@ -53,12 +53,12 @@ func LoadConfig() (Config, error) {
 		DemoProviderProfileID:  envOrDefault("AGENSENSE_DEMO_PROVIDER_PROFILE_ID", "default"),
 		DefaultAPIKey:          envOrDefault("AGENSENSE_DEFAULT_API_KEY", "demo-user-key"),
 		DefaultProviderID:      envOrDefault("AGENSENSE_DEFAULT_PROVIDER_ID", "default"),
-		DefaultProviderName:    envOrDefault("AGENSENSE_DEFAULT_PROVIDER_NAME", "Mock Default"),
-		DefaultProviderBaseURL: envOrDefault("AGENSENSE_DEFAULT_PROVIDER_BASE_URL", "mock://default"),
+		DefaultProviderName:    envOrDefault("AGENSENSE_DEFAULT_PROVIDER_NAME", "LocalAI Default"),
+		DefaultProviderBaseURL: envOrDefault("AGENSENSE_DEFAULT_PROVIDER_BASE_URL", "http://127.0.0.1:8081/v1"),
 		DefaultProviderAPIKey:  envOrDefault("AGENSENSE_DEFAULT_PROVIDER_API_KEY", ""),
-		DefaultASRModel:        envOrDefault("AGENSENSE_DEFAULT_ASR_MODEL", "mock-asr"),
-		DefaultLLMModel:        envOrDefault("AGENSENSE_DEFAULT_LLM_MODEL", "mock-llm"),
-		DefaultTTSModel:        envOrDefault("AGENSENSE_DEFAULT_TTS_MODEL", "mock-tts"),
+		DefaultASRModel:        envOrDefault("AGENSENSE_DEFAULT_ASR_MODEL", "whisper-1"),
+		DefaultLLMModel:        envOrDefault("AGENSENSE_DEFAULT_LLM_MODEL", "gemma-4-e2b-it"),
+		DefaultTTSModel:        envOrDefault("AGENSENSE_DEFAULT_TTS_MODEL", "tts-1"),
 		RetryHintSec:           envOrDefaultInt("AGENSENSE_RETRY_HINT_SEC", 30),
 	}
 
