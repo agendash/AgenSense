@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/agendash/AgenSense/internal/debugtrace"
@@ -88,6 +89,22 @@ func (fakeInference) Chat(context.Context, string, service.ChatInferenceRequest)
 		ProviderProfileID: "mock-default",
 		Text:              "mock reply",
 		Deltas:            []string{"mock ", "reply"},
+	}, nil
+}
+
+func (fakeInference) ChatStream(_ context.Context, _ string, _ service.ChatInferenceRequest, cb service.ChatDeltaCallback) (service.ChatInferenceResponse, error) {
+	deltas := []string{"mock ", "reply"}
+	for _, delta := range deltas {
+		if cb != nil {
+			if err := cb(delta); err != nil {
+				return service.ChatInferenceResponse{}, err
+			}
+		}
+	}
+	return service.ChatInferenceResponse{
+		ProviderProfileID: "mock-default",
+		Text:              "mock reply",
+		Deltas:            deltas,
 	}, nil
 }
 
@@ -183,6 +200,31 @@ func TestDirectLLMRoute(t *testing.T) {
 	body, _ := io.ReadAll(rec.Body)
 	if !bytes.Contains(body, []byte(`"text":"mock reply"`)) {
 		t.Fatalf("unexpected body: %s", body)
+	}
+}
+
+func TestDirectLLMStreamRoute(t *testing.T) {
+	t.Parallel()
+
+	handler := NewRouter(fakeControl{}, fakeRegistry{}, fakeInference{}, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/v1/llm/chat/stream", bytes.NewBufferString(`{"provider_profile_id":"mock-default","messages":[{"role":"user","content":"hello"}]}`))
+	req.Header.Set("Authorization", "Bearer test-api-key")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "text/event-stream") {
+		t.Fatalf("content-type = %q, want text/event-stream", got)
+	}
+	body, _ := io.ReadAll(rec.Body)
+	if !bytes.Contains(body, []byte("event: delta")) || !bytes.Contains(body, []byte(`"text":"mock "`)) {
+		t.Fatalf("missing delta event: %s", body)
+	}
+	if !bytes.Contains(body, []byte("event: done")) || !bytes.Contains(body, []byte(`"text":"mock reply"`)) {
+		t.Fatalf("missing done event: %s", body)
 	}
 }
 

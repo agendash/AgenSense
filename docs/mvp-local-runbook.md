@@ -43,7 +43,7 @@ Default runtime:
 - default API key: `demo-user-key`
 - default provider profile: `default`
 - default provider base URL: `http://127.0.0.1:8081/v1`
-- default models: `whisper-1`, `gemma-4-e2b-it`, `tts-1`
+- default models: `whisper-1`, `hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m`, `faster-qwen3-tts`
 
 ## Health Check
 
@@ -91,10 +91,10 @@ curl -sS \
     "asr_model":"whisper-1",
     "llm_base_url":"'"${PROVIDER_BASE_URL}"'",
     "llm_api_key":"'"${PROVIDER_API_KEY}"'",
-    "llm_model":"gpt-4o-mini",
+    "llm_model":"hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m",
     "tts_base_url":"'"${PROVIDER_BASE_URL}"'",
     "tts_api_key":"'"${PROVIDER_API_KEY}"'",
-    "tts_model":"tts-1",
+    "tts_model":"faster-qwen3-tts",
     "default":true
   }'
 ```
@@ -218,6 +218,19 @@ The smoke runner verifies:
 - `tts.start`
 - downstream binary TTS audio
 - `tts.stop`
+
+## GUI Lite Validation
+
+For interactive checks, use [AgenSense GUI Lite](https://github.com/agendash/agensense-gui-lite):
+
+```sh
+cd ../agensense-gui-lite
+flutter run -d macos
+```
+
+Use the GUI to validate provider registration, direct ASR/LLM/TTS APIs, streaming ASR, realtime Voice WS, device compatibility endpoints, and `/debug/api/traces`.
+
+See [AgenSense GUI Lite](gui-lite.md) for details.
 - `response.done`
 - optional debug trace and audio assets
 

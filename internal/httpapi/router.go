@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -47,6 +48,7 @@ func NewRouter(control service.ControlPlane, registry service.ProviderRegistry, 
 	mux.HandleFunc("/v1/providers/", r.handleProviderByID)
 	mux.HandleFunc("/v1/asr/transcribe", r.handleASRTranscribe)
 	mux.HandleFunc("/v1/llm/chat", r.handleLLMChat)
+	mux.HandleFunc("/v1/llm/chat/stream", r.handleLLMChatStream)
 	mux.HandleFunc("/v1/tts/synthesize", r.handleTTSSynthesize)
 	if sessionWS != nil {
 		mux.Handle("/v1/session/ws", sessionWS)
@@ -364,6 +366,53 @@ func (r *Router) handleLLMChat(w http.ResponseWriter, req *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+func (r *Router) handleLLMChatStream(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed")
+		return
+	}
+	if r.inference == nil {
+		writeError(w, http.StatusServiceUnavailable, "inference_unavailable")
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming_unavailable")
+		return
+	}
+	apiKey := bearerToken(req.Header.Get("Authorization"))
+	if apiKey == "" {
+		writeError(w, http.StatusUnauthorized, "missing_api_key")
+		return
+	}
+	var input service.ChatInferenceRequest
+	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	resp, err := r.inference.ChatStream(req.Context(), apiKey, input, func(delta string) error {
+		if err := writeSSE(w, "delta", map[string]string{"text": delta}); err != nil {
+			return err
+		}
+		flusher.Flush()
+		return nil
+	})
+	if err != nil {
+		_ = writeSSE(w, "error", map[string]string{"error": err.Error()})
+		flusher.Flush()
+		return
+	}
+	_ = writeSSE(w, "done", resp)
+	flusher.Flush()
+}
+
 func (r *Router) handleTTSSynthesize(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed")
@@ -424,6 +473,20 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]any{
 		"error": message,
 	})
+}
+
+func writeSSE(w http.ResponseWriter, event string, data any) error {
+	raw, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(event) != "" {
+		if _, err := fmt.Fprintf(w, "event: %s\n", event); err != nil {
+			return err
+		}
+	}
+	_, err = fmt.Fprintf(w, "data: %s\n\n", raw)
+	return err
 }
 
 func mapErrorStatus(err error) int {

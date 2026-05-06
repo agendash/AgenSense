@@ -66,7 +66,7 @@ The default provider profile points at a local LocalAI server:
 - API key: `demo-user-key`
 - profile id: `default`
 - base URL: `http://127.0.0.1:8081/v1`
-- models: `whisper-1`, `gemma-4-e2b-it`, `tts-1`
+- models: `whisper-1`, `hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m`, `faster-qwen3-tts`
 
 AgenSense uses port `8080`, so the documented LocalAI host port is `8081`. Inside the optional Docker Compose full stack, AgenSense reaches LocalAI at `http://localai:8080/v1`.
 
@@ -106,10 +106,10 @@ curl -sS \
     "asr_model":"whisper-1",
     "llm_base_url":"'"${PROVIDER_BASE_URL}"'",
     "llm_api_key":"'"${PROVIDER_API_KEY}"'",
-    "llm_model":"gpt-4o-mini",
+    "llm_model":"hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m",
     "tts_base_url":"'"${PROVIDER_BASE_URL}"'",
     "tts_api_key":"'"${PROVIDER_API_KEY}"'",
-    "tts_model":"tts-1",
+    "tts_model":"faster-qwen3-tts",
     "default":true
   }'
 ```
@@ -130,6 +130,17 @@ Run the smoke runner after the service is up:
 ```sh
 go run ./cmd/agensense-smoke
 ```
+
+## GUI Lite Validation
+
+For manual validation, use [AgenSense GUI Lite](https://github.com/agendash/agensense-gui-lite). It is a lightweight Flutter client for provider registration, direct ASR/LLM/TTS checks, realtime Voice WS testing, device compatibility checks, and debug trace inspection.
+
+```sh
+cd ../agensense-gui-lite
+flutter run -d macos
+```
+
+See [docs/gui-lite.md](docs/gui-lite.md) for the full validation workflow.
 
 ## Deployment
 
@@ -167,11 +178,18 @@ Common environment variables:
 - `AGENSENSE_DISABLE_DEMO_SEED=true`: disables the built-in demo device seed
 - `AGENSENSE_DEFAULT_PROVIDER_BASE_URL`: default provider base URL, default `http://127.0.0.1:8081/v1`
 - `AGENSENSE_DEFAULT_PROVIDER_API_KEY`: default upstream provider API key
+- `AGENSENSE_ASR_CHINESE_SCRIPT`: Chinese transcript normalization, default `zh-Hans`; set `original` to keep upstream ASR text unchanged
+- `AGENSENSE_OPENAI_ASR_LANGUAGE`: optional OpenAI-compatible ASR language hint
+- `AGENSENSE_OPENAI_ASR_PROMPT`: optional OpenAI-compatible ASR prompt; the default asks Chinese transcripts to use Simplified Chinese
+- `AGENSENSE_OPENAI_TTS_VOICE`: OpenAI-compatible TTS voice, default example `Serena`; set `none` if the upstream rejects the voice field
+- `AGENSENSE_OPENAI_TTS_RESPONSE_FORMAT`: requested TTS response format, default `pcm`
+- `AGENSENSE_OPENAI_TTS_SENTENCE_STREAM`: optional sentence-level TTS chunking, default `0`
 
 ## Documentation
 
 - [Provider API](docs/provider-api.md)
 - [Local runbook](docs/mvp-local-runbook.md)
+- [AgenSense GUI Lite](docs/gui-lite.md)
 - [Architecture](docs/architecture.md)
 - [Device bootstrap](docs/device-bootstrap.md)
 - [Realtime protocol](docs/protocol.md)

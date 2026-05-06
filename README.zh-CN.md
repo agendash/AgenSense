@@ -56,6 +56,15 @@ go run ./cmd/agensense-smoke
 
 这个 smoke runner 默认会先调用 `/v1/tts/synthesize` 生成一段测试语音，再把这段音频按麦克风流模拟 `AgenDash` 发送到 `/v1/voice/ws`，并校验 `VAD -> ASR -> LLM delta -> TTS binary`。如果服务端设置了 `AGENSENSE_DEBUG=true`，smoke 也会校验 debug trace 和音频资产。默认会创建一个独立的 `smoke-mock` provider profile，避免被本机真实 provider 状态干扰；如果要测真实 provider，可以关掉 `-ensure-mock-provider`。
 
+如果需要手动验证 provider 注册、ASR / LLM / TTS、实时 Voice WS、设备兼容接口和 debug trace，可以使用 [AgenSense GUI Lite](https://github.com/agendash/agensense-gui-lite)：
+
+```sh
+cd ../agensense-gui-lite
+flutter run -d macos
+```
+
+详细流程见 [GUI Lite 验证客户端](docs/zh-CN/gui-lite.md)。
+
 如果还要把识别结果继续打到本机 `AgenLeash`，启动 code agent 并验证 workspace API，可以加：
 
 ```sh
@@ -115,8 +124,8 @@ go run ./cmd/agensense-smoke \
 - 默认上游：`http://127.0.0.1:8081/v1`
 - 默认模型：
   - ASR：`whisper-1`
-  - LLM：`gemma-4-e2b-it`
-  - TTS：`tts-1`
+  - LLM：`hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m`
+  - TTS：`faster-qwen3-tts`
 
 AgenSense 默认假设本机 LocalAI 监听在 `127.0.0.1:8081`，避免和 AgenSense 自己的 `8080` 端口冲突。Docker Compose 全栈模式下，AgenSense 容器会通过 `http://localai:8080/v1` 访问 LocalAI。
 
@@ -180,10 +189,10 @@ curl -sS \
     "asr_model":"whisper-1",
     "llm_base_url":"'"${PROVIDER_BASE_URL}"'",
     "llm_api_key":"'"${PROVIDER_API_KEY}"'",
-    "llm_model":"gpt-4o-mini",
+    "llm_model":"hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m",
     "tts_base_url":"'"${PROVIDER_BASE_URL}"'",
     "tts_api_key":"'"${PROVIDER_API_KEY}"'",
-    "tts_model":"tts-1",
+    "tts_model":"faster-qwen3-tts",
     "default":true
   }'
 ```

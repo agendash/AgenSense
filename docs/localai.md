@@ -66,8 +66,8 @@ http://127.0.0.1:8081
 Default AgenSense model names:
 
 - ASR: `whisper-1`
-- LLM: `gemma-4-e2b-it`
-- TTS: `tts-1`
+- LLM: `hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m`
+- TTS: `faster-qwen3-tts`
 
 Make sure your LocalAI instance has models with those IDs, or override them:
 
@@ -78,6 +78,16 @@ export AGENSENSE_DEFAULT_TTS_MODEL="your-tts-model"
 ```
 
 LocalAI can install models from its web UI, its model gallery, or CLI/model URI flows. Model availability depends on the LocalAI installation and hardware.
+
+For the recommended bilingual local TTS path, install LocalAI's `faster-qwen3-tts` gallery model and run AgenSense with:
+
+```sh
+export AGENSENSE_DEFAULT_TTS_MODEL="faster-qwen3-tts"
+export AGENSENSE_OPENAI_TTS_VOICE="Serena"
+export AGENSENSE_OPENAI_TTS_RESPONSE_FORMAT="pcm"
+```
+
+`faster-qwen3-tts` handles Chinese and English well in one request. Voice support is backend-specific: the current LocalAI test stack accepts named voices such as `Serena`, while some backends reject generic OpenAI voices such as `alloy`. Set `AGENSENSE_OPENAI_TTS_VOICE=none` if your backend rejects the voice field. AgenSense also unwraps LocalAI WAV responses into `pcm_s16le` frames and reports the actual sample rate returned by the provider.
 
 ## API Key
 

@@ -105,8 +105,8 @@ export AGENSENSE_API_KEY="demo-user-key"
 第一版启动后，会自动给 `demo-user-key` 这类默认 namespace 补上一套 `default`：
 
 - `ASR`: `whisper-1`
-- `LLM`: `gemma-4-e2b-it`
-- `TTS`: `tts-1`
+- `LLM`: `hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m`
+- `TTS`: `faster-qwen3-tts`
 - Host: `http://127.0.0.1:8081/v1`
 
 默认 LocalAI 使用宿主机 `8081`，避免和 AgenSense 服务端口 `8080` 冲突。Docker Compose 全栈模式下，AgenSense 容器内使用 `http://localai:8080/v1`。
@@ -141,10 +141,10 @@ curl -sS \
     "asr_model":"whisper-1",
     "llm_base_url":"'"${PROVIDER_BASE_URL}"'",
     "llm_api_key":"'"${PROVIDER_API_KEY}"'",
-    "llm_model":"gpt-4o-mini",
+    "llm_model":"hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m",
     "tts_base_url":"'"${PROVIDER_BASE_URL}"'",
     "tts_api_key":"'"${PROVIDER_API_KEY}"'",
-    "tts_model":"tts-1",
+    "tts_model":"faster-qwen3-tts",
     "default":true
   }'
 ```
@@ -180,10 +180,10 @@ curl -sS \
     "asr_model":"whisper-1",
     "llm_base_url":"'"${PROVIDER_BASE_URL}"'",
     "llm_api_key":"'"${PROVIDER_API_KEY}"'",
-    "llm_model":"gpt-4o-mini",
+    "llm_model":"hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m",
     "tts_base_url":"'"${PROVIDER_BASE_URL}"'",
     "tts_api_key":"'"${PROVIDER_API_KEY}"'",
-    "tts_model":"tts-1",
+    "tts_model":"faster-qwen3-tts",
     "default":true
   }'
 ```
@@ -275,6 +275,19 @@ curl -sS \
 - `tts.start`
 - 下行 TTS binary frame
 - `tts.stop`
+
+## GUI Lite 验证
+
+如果需要交互式检查，可以使用 [AgenSense GUI Lite](https://github.com/agendash/agensense-gui-lite)：
+
+```sh
+cd ../agensense-gui-lite
+flutter run -d macos
+```
+
+它可以用来验证 provider 注册、直接 ASR / LLM / TTS、流式 ASR、实时 Voice WS、设备兼容接口以及 `/debug/api/traces`。
+
+详细说明见 [GUI Lite 验证客户端](gui-lite.md)。
 - `response.done`
 - 如果服务端设置了 `AGENSENSE_DEBUG=true`，还会校验 `/debug/api/traces` 中对应的 voice trace 和音频资产
 

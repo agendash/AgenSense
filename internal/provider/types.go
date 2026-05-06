@@ -50,7 +50,8 @@ type TTSRequest struct {
 
 // AudioChunk is one streamed audio chunk emitted by a TTS provider.
 type AudioChunk struct {
-	Data []byte
+	Data   []byte
+	Format AudioFormat
 }
 
 // ASRClient transcribes audio into text.

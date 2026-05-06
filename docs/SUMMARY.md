@@ -4,6 +4,7 @@
 * [Architecture](architecture.md)
 * [Provider API](provider-api.md)
 * [Local Runbook](mvp-local-runbook.md)
+* [AgenSense GUI Lite](gui-lite.md)
 * [Deployment](deployment.md)
 * [LocalAI Setup](localai.md)
 * [Release Process](release.md)

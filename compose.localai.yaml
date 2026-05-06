@@ -1,8 +1,14 @@
 services:
   agensense:
     environment:
+      AGENSENSE_DEFAULT_PROVIDER_NAME: "LocalAI Default"
       AGENSENSE_DEFAULT_PROVIDER_BASE_URL: "http://localai:8080/v1"
       AGENSENSE_DEFAULT_PROVIDER_API_KEY: "${LOCALAI_API_KEY:-}"
+      AGENSENSE_DEFAULT_ASR_MODEL: "${AGENSENSE_DEFAULT_ASR_MODEL:-whisper-1}"
+      AGENSENSE_DEFAULT_LLM_MODEL: "${AGENSENSE_DEFAULT_LLM_MODEL:-hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m}"
+      AGENSENSE_DEFAULT_TTS_MODEL: "${AGENSENSE_DEFAULT_TTS_MODEL:-faster-qwen3-tts}"
+      AGENSENSE_OPENAI_TTS_VOICE: "${AGENSENSE_OPENAI_TTS_VOICE:-Serena}"
+      AGENSENSE_OPENAI_TTS_RESPONSE_FORMAT: "${AGENSENSE_OPENAI_TTS_RESPONSE_FORMAT:-pcm}"
     depends_on:
       localai:
         condition: service_healthy

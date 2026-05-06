@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/agendash/AgenSense/internal/debugtrace"
 	"github.com/agendash/AgenSense/internal/gateway/wsconn"
@@ -32,21 +33,37 @@ const (
 	defaultClientID         = "agendash-voice"
 	defaultSampleRateHz     = 16000
 	defaultChannels         = 1
-	partialMinWindow        = 600 * time.Millisecond
-	partialMinGrowthFactor  = 350 * time.Millisecond
+	partialMinWindow        = 1500 * time.Millisecond
+	partialMinGrowthFactor  = 1200 * time.Millisecond
 	vadSpeechThreshold      = 0.012
 	vadSilenceReleaseFactor = 220 * time.Millisecond
+	realtimeTTSMaxRunes     = 48
+	realtimeTTSSoftMinRunes = 36
+	recentSpeechWindow      = 20 * time.Second
+	recentSpeechLimit       = 4
+	echoMinRunes            = 8
 )
 
 const voiceReplySystemPrompt = `You are AgenSense, a shared voice orchestration assistant for AgenDash clients.
 
 Respond for speech playback, not a terminal or chat transcript.
-- Keep the reply to one or two short sentences.
+- Keep the reply to one short sentence unless the user explicitly asks for detail.
+- Target 28 Chinese characters or 16 English words.
 - Say the outcome, next action, or blocking issue directly.
 - Do not output markdown, bullet lists, JSON, XML, ANSI escapes, or tool-call notation.
 - Do not narrate hidden reasoning or internal implementation details.
 - If no remote code agent is focused, stay in local assistant mode and say that a focused agent is required for remote execution.
 - If the request clearly sounds like an approval, scene switch, or playback command, keep the wording brief and confirmation-oriented.`
+
+const voiceEchoContextPrompt = `Acoustic echo guard:
+The user's ASR transcript may contain words from your recent spoken output.
+Recent assistant speech:
+%s
+
+Latest ASR transcript:
+%s
+
+Ignore repeated assistant speech as acoustic echo. Answer only the user's new intent. Do not answer your own prior wording.`
 
 type sessionDeps struct {
 	conn     *wsconn.Conn
@@ -89,12 +106,15 @@ type session struct {
 	segmentPeakLevel float64
 
 	partialInFlight bool
+	partialCancel   context.CancelFunc
+	partialRunID    int64
 	lastPartialAt   time.Time
 	lastPartialText string
 	lastPartialSize int
 
 	responseCancel context.CancelFunc
 	responseStatus responseRuntime
+	recentSpeech   []recentSpeechText
 
 	idCounter int64
 }
@@ -105,6 +125,7 @@ type sessionConfig struct {
 	SessionID         string
 	ProviderProfileID string
 	ResponseLanguage  string
+	AutoRespond       bool
 	Format            provider.AudioFormat
 	VoiceAssistant    service.VoiceAssistantMetadata
 }
@@ -114,6 +135,23 @@ type responseRuntime struct {
 	text       string
 	chunkCount int
 	audioBytes int
+}
+
+type realtimeTTSResult struct {
+	chunkCount int
+	audioBytes int
+	format     provider.AudioFormat
+	err        error
+}
+
+type realtimeTTSSegmenter struct {
+	buf       strings.Builder
+	runeCount int
+}
+
+type recentSpeechText struct {
+	text string
+	at   time.Time
 }
 
 type completedSegment struct {
@@ -133,6 +171,7 @@ type sessionUpdatePayload struct {
 	SessionID         string                          `json:"session_id,omitempty"`
 	ProviderProfileID string                          `json:"provider_profile_id,omitempty"`
 	ResponseLanguage  string                          `json:"response_language,omitempty"`
+	AutoRespond       bool                            `json:"auto_response,omitempty"`
 	Format            map[string]any                  `json:"format,omitempty"`
 	VoiceAssistant    *service.VoiceAssistantMetadata `json:"voice_assistant,omitempty"`
 	UIContext         map[string]any                  `json:"ui_context,omitempty"`
@@ -146,6 +185,7 @@ type sessionReadyPayload struct {
 	SessionID         string                          `json:"session_id"`
 	ProviderProfileID string                          `json:"provider_profile_id"`
 	ResponseLanguage  string                          `json:"response_language,omitempty"`
+	AutoRespond       bool                            `json:"auto_response,omitempty"`
 	Format            protocol.AudioStartPayload      `json:"format"`
 	VoiceAssistant    *service.VoiceAssistantMetadata `json:"voice_assistant,omitempty"`
 }
@@ -224,6 +264,7 @@ func (s *session) run(ctx context.Context) {
 			}
 		case wsconn.OpClose:
 			s.cancelResponse()
+			s.cancelPartialASR()
 			s.completeOpenTrace()
 			return
 		default:
@@ -305,6 +346,7 @@ func (s *session) handleSessionUpdate(ctx context.Context, input sessionUpdatePa
 		input.Metadata,
 		cfg.VoiceAssistant,
 	)
+	cfg.AutoRespond = input.AutoRespond
 
 	profile, err := s.registry.ResolveProviderProfile(ctx, s.apiKey, strings.TrimSpace(input.ProviderProfileID))
 	if err != nil {
@@ -343,6 +385,7 @@ func (s *session) handleSessionUpdate(ctx context.Context, input sessionUpdatePa
 		SessionID:         cfg.SessionID,
 		ProviderProfileID: cfg.ProviderProfileID,
 		ResponseLanguage:  cfg.ResponseLanguage,
+		AutoRespond:       cfg.AutoRespond,
 		Format: protocol.AudioStartPayload{
 			StreamID:     "input",
 			Codec:        cfg.Format.Codec,
@@ -365,6 +408,7 @@ func (s *session) handleAudioStart(payload protocol.AudioStartPayload) error {
 	}
 
 	s.cancelResponse()
+	s.cancelPartialASR()
 	s.completeOpenTrace()
 
 	s.mu.Lock()
@@ -389,6 +433,8 @@ func (s *session) handleAudioStart(payload protocol.AudioStartPayload) error {
 	s.segmentStartMs = 0
 	s.segmentPeakLevel = 0
 	s.partialInFlight = false
+	s.partialCancel = nil
+	s.partialRunID++
 	s.lastPartialAt = time.Time{}
 	s.lastPartialText = ""
 	s.lastPartialSize = 0
@@ -457,8 +503,15 @@ func (s *session) handleAudioChunk(ctx context.Context, payload []byte) error {
 		!s.partialInFlight &&
 		(now.Sub(s.lastPartialAt) >= partialMinWindow || s.lastPartialAt.IsZero()) &&
 		formatByteDuration(format, len(audioSnapshot)-s.lastPartialSize) >= partialMinGrowthFactor
+	var partialCtx context.Context
+	var partialRunID int64
 	if canPartial {
+		var partialCancel context.CancelFunc
+		partialCtx, partialCancel = context.WithCancel(ctx)
+		s.partialRunID++
+		partialRunID = s.partialRunID
 		s.partialInFlight = true
+		s.partialCancel = partialCancel
 		s.lastPartialAt = now
 		s.lastPartialSize = len(audioSnapshot)
 	}
@@ -477,7 +530,7 @@ func (s *session) handleAudioChunk(ctx context.Context, payload []byte) error {
 	}
 
 	if canPartial {
-		go s.runPartialASR(ctx, asrClient, cfg, streamID, format, audioSnapshot)
+		go s.runPartialASR(partialCtx, partialRunID, asrClient, cfg, streamID, format, audioSnapshot)
 	}
 	return nil
 }
@@ -508,10 +561,13 @@ func (s *session) handleAudioStop(ctx context.Context, payload protocol.AudioSto
 	cfg := s.cfg
 	trace := s.turnTrace
 	completed := s.completeActiveSegmentLocked(payload.StreamID, format, len(s.inboundAudio), 0)
+	partialCancel := s.cancelPartialASRLocked()
 	s.inboundAudio = s.inboundAudio[:0]
 	s.inboundSeq = 0
-	s.partialInFlight = false
 	s.mu.Unlock()
+	if partialCancel != nil {
+		partialCancel()
+	}
 
 	if trace != nil {
 		trace.SetInputAudio(format, audio)
@@ -583,10 +639,13 @@ func (s *session) handleResponseCreate(ctx context.Context, payload responseCrea
 	return nil
 }
 
-func (s *session) runPartialASR(ctx context.Context, asr provider.ASRClient, cfg sessionConfig, streamID string, format provider.AudioFormat, audio []byte) {
+func (s *session) runPartialASR(ctx context.Context, runID int64, asr provider.ASRClient, cfg sessionConfig, streamID string, format provider.AudioFormat, audio []byte) {
 	defer func() {
 		s.mu.Lock()
-		s.partialInFlight = false
+		if s.partialRunID == runID {
+			s.partialInFlight = false
+			s.partialCancel = nil
+		}
 		s.mu.Unlock()
 	}()
 	if asr == nil || len(audio) == 0 {
@@ -600,6 +659,9 @@ func (s *session) runPartialASR(ctx context.Context, asr provider.ASRClient, cfg
 		Audio:     audio,
 	})
 	if err != nil {
+		return
+	}
+	if ctx.Err() != nil {
 		return
 	}
 	text := strings.TrimSpace(resp.Text)
@@ -662,6 +724,34 @@ func (s *session) runFinalASR(ctx context.Context, asr provider.ASRClient, cfg s
 	}); err != nil {
 		slog.WarnContext(ctx, "voice websocket asr.final write failed", "error", err)
 	}
+	if !cfg.AutoRespond {
+		return
+	}
+	responseText := text
+	if isBlankASRText(text) {
+		if trace != nil {
+			trace.AddEvent("asr.blank_fallback", "speech detected but ASR returned no stable transcript")
+		}
+		responseText = "Speech-like audio was detected, but ASR returned no stable transcript. Ask the user to repeat briefly."
+	}
+	if err := s.handleResponseCreate(ctx, responseCreatePayload{
+		Text:             responseText,
+		ResponseLanguage: cfg.ResponseLanguage,
+		VoiceAssistant:   cfg.VoiceAssistant,
+		Metadata:         cfg.VoiceAssistant.Metadata,
+		AssistantIntent:  cfg.VoiceAssistant.AssistantIntent,
+		UIContext:        cfg.VoiceAssistant.UIContext,
+	}); err != nil {
+		if trace != nil {
+			trace.Fail(err)
+			s.clearTurnTrace(trace)
+		}
+		s.writeError("response_create_failed", err.Error())
+		_ = s.writeEvent(eventResponseDone, responseDonePayload{
+			Status: "failed",
+			Text:   text,
+		})
+	}
 }
 
 func (s *session) runResponse(ctx context.Context, llm provider.LLMClient, tts provider.TTSClient, cfg sessionConfig, format provider.AudioFormat, text string, voiceAssistant service.VoiceAssistantMetadata, trace *debugtrace.Handle) {
@@ -680,6 +770,24 @@ func (s *session) runResponse(ctx context.Context, llm provider.LLMClient, tts p
 				Content: contextPrompt,
 			})
 		}
+		if sharedPrompt := sharedSystemPrompt(voiceAssistant); sharedPrompt != "" {
+			messages = append(messages, provider.ChatMessage{
+				Role:    "system",
+				Content: "Shared GUI system prompt:\n" + sharedPrompt,
+			})
+			if trace != nil {
+				trace.AddEvent("shared_system_prompt", previewDetail(sharedPrompt, 160))
+			}
+		}
+	}
+	if echoPrompt := s.recentSpeechPrompt(text); echoPrompt != "" {
+		messages = append(messages, provider.ChatMessage{
+			Role:    "system",
+			Content: echoPrompt,
+		})
+		if trace != nil {
+			trace.AddEvent("echo.context", previewDetail(echoPrompt, 160))
+		}
 	}
 	messages = append(messages, provider.ChatMessage{Role: "user", Content: text})
 	if trace != nil {
@@ -691,7 +799,57 @@ func (s *session) runResponse(ctx context.Context, llm provider.LLMClient, tts p
 		trace.StartLLM(messages)
 	}
 
+	ttsCtx, cancelTTS := context.WithCancel(ctx)
+	defer cancelTTS()
+	ttsSegments := make(chan string, 8)
+	ttsResultCh := make(chan realtimeTTSResult, 1)
+	go func() {
+		ttsResultCh <- s.runRealtimeTTS(ttsCtx, tts, cfg, format, trace, ttsSegments)
+	}()
+
+	segmentsClosed := false
+	closeSegments := func() {
+		if !segmentsClosed {
+			close(ttsSegments)
+			segmentsClosed = true
+		}
+	}
+	var earlyTTSResult *realtimeTTSResult
+	waitForTTS := func() realtimeTTSResult {
+		closeSegments()
+		if earlyTTSResult != nil {
+			return *earlyTTSResult
+		}
+		return <-ttsResultCh
+	}
+	var ttsCallbackErr error
+	enqueueTTSSegment := func(segment string) error {
+		segment = strings.TrimSpace(segment)
+		if segment == "" {
+			return nil
+		}
+		if earlyTTSResult != nil {
+			if earlyTTSResult.err != nil {
+				return earlyTTSResult.err
+			}
+			return fmt.Errorf("tts pipeline stopped before accepting text")
+		}
+		select {
+		case ttsSegments <- segment:
+			return nil
+		case result := <-ttsResultCh:
+			earlyTTSResult = &result
+			if result.err != nil {
+				return result.err
+			}
+			return fmt.Errorf("tts pipeline stopped before accepting text")
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
 	var llmReply strings.Builder
+	var segmenter realtimeTTSSegmenter
 	err := llm.ChatStream(ctx, provider.ChatRequest{
 		DeviceID:  cfg.ClientID,
 		SessionID: cfg.SessionID,
@@ -701,11 +859,31 @@ func (s *session) runResponse(ctx context.Context, llm provider.LLMClient, tts p
 		if trace != nil {
 			trace.AddLLMDelta(delta.Text)
 		}
-		return s.writeEvent(protocol.EventLLMDelta, protocol.LLMDeltaPayload{
+		if err := s.writeEvent(protocol.EventLLMDelta, protocol.LLMDeltaPayload{
 			Text: delta.Text,
-		})
+		}); err != nil {
+			return err
+		}
+		for _, segment := range segmenter.Add(delta.Text) {
+			if err := enqueueTTSSegment(segment); err != nil {
+				ttsCallbackErr = err
+				return err
+			}
+		}
+		return nil
 	})
 	if err != nil {
+		cancelTTS()
+		closeSegments()
+		if ttsCallbackErr != nil && ctx.Err() == nil {
+			if trace != nil {
+				trace.Fail(ttsCallbackErr)
+				s.clearTurnTrace(trace)
+			}
+			s.writeError("tts_failed", ttsCallbackErr.Error())
+			s.writeEvent(eventResponseDone, responseDonePayload{Status: "failed"})
+			return
+		}
 		if ctx.Err() == context.Canceled {
 			if trace != nil {
 				trace.AddEvent("response.cancelled", "")
@@ -726,7 +904,52 @@ func (s *session) runResponse(ctx context.Context, llm provider.LLMClient, tts p
 
 	replyText := strings.TrimSpace(llmReply.String())
 	if replyText == "" {
-		replyText = "I did not catch a stable request."
+		if trace != nil {
+			trace.AddEvent("llm.empty_speech", "provider completed without speech text")
+			trace.CompleteLLM(replyText)
+		}
+		if err := s.writeEvent(protocol.EventLLMDone, protocol.LLMDonePayload{Text: replyText}); err != nil {
+			s.writeError("llm_done_failed", err.Error())
+			if trace != nil {
+				trace.Fail(err)
+				s.clearTurnTrace(trace)
+			}
+			return
+		}
+		ttsResult := waitForTTS()
+		if ttsResult.err != nil && ctx.Err() != context.Canceled {
+			s.writeError("tts_failed", ttsResult.err.Error())
+			s.writeEvent(eventResponseDone, responseDonePayload{Status: "failed", Text: replyText})
+			if trace != nil {
+				trace.Fail(ttsResult.err)
+				s.clearTurnTrace(trace)
+			}
+			return
+		}
+		status := "completed"
+		if ctx.Err() == context.Canceled {
+			status = "cancelled"
+		}
+		s.writeEvent(eventResponseDone, responseDonePayload{Status: status, Text: replyText})
+		if trace != nil {
+			trace.AddEvent("response.done", status)
+			trace.Complete()
+			s.clearTurnTrace(trace)
+		}
+		return
+	} else {
+		for _, segment := range segmenter.Flush() {
+			if err := enqueueTTSSegment(segment); err != nil {
+				cancelTTS()
+				if trace != nil {
+					trace.Fail(err)
+					s.clearTurnTrace(trace)
+				}
+				s.writeError("tts_failed", err.Error())
+				s.writeEvent(eventResponseDone, responseDonePayload{Status: "failed", Text: replyText})
+				return
+			}
+		}
 	}
 	if trace != nil {
 		trace.CompleteLLM(replyText)
@@ -740,59 +963,38 @@ func (s *session) runResponse(ctx context.Context, llm provider.LLMClient, tts p
 		return
 	}
 
-	streamID := s.nextID("tts")
-	if trace != nil {
-		trace.StartTTS(replyText, format)
+	ttsResult := waitForTTS()
+	if ttsResult.err == nil && ttsResult.chunkCount == 0 {
+		ttsResult.err = fmt.Errorf("tts produced no audio")
 	}
-	if err := s.writeEvent(protocol.EventTTSStart, protocol.AudioStartPayload{
-		StreamID:     streamID,
-		Codec:        format.Codec,
-		SampleRateHz: format.SampleRateHz,
-		Channels:     format.Channels,
-	}); err != nil {
-		s.writeError("tts_start_failed", err.Error())
-		if trace != nil {
-			trace.Fail(err)
-			s.clearTurnTrace(trace)
-		}
-		return
+	ttsFormat := ttsResult.format
+	if trace != nil && ttsResult.err == nil {
+		trace.CompleteTTS(ttsFormat)
 	}
-
-	chunkCount := 0
-	audioBytes := 0
-	err = tts.SynthesizeStream(ctx, provider.TTSRequest{
-		DeviceID:  cfg.ClientID,
-		SessionID: cfg.SessionID,
-		Text:      replyText,
-		Format:    format,
-	}, func(chunk provider.AudioChunk) error {
-		chunkCount++
-		audioBytes += len(chunk.Data)
-		if trace != nil {
-			trace.AddTTSChunk(chunk.Data)
+	if ttsResult.err != nil {
+		if ctx.Err() == context.Canceled {
+			if trace != nil {
+				trace.AddEvent("response.cancelled", "")
+				trace.Complete()
+				s.clearTurnTrace(trace)
+			}
+			s.writeEvent(eventResponseDone, responseDonePayload{Status: "cancelled", Text: replyText})
+			return
 		}
-		return s.conn.WriteBinary(chunk.Data)
-	})
-	if err != nil && ctx.Err() != context.Canceled {
-		s.writeError("tts_failed", err.Error())
+		s.writeError("tts_failed", ttsResult.err.Error())
 		s.writeEvent(eventResponseDone, responseDonePayload{Status: "failed", Text: replyText})
 		if trace != nil {
-			trace.Fail(err)
+			trace.Fail(ttsResult.err)
 			s.clearTurnTrace(trace)
 		}
 		return
 	}
 
-	_ = s.writeEvent(protocol.EventTTSStop, protocol.AudioStopPayload{
-		StreamID: streamID,
-		LastSeq:  chunkCount,
-	})
 	status := "completed"
 	if ctx.Err() == context.Canceled {
 		status = "cancelled"
 	}
 	if trace != nil {
-		trace.CompleteTTS(format)
 		trace.AddEvent("response.done", status)
 		trace.Complete()
 		s.clearTurnTrace(trace)
@@ -800,9 +1002,227 @@ func (s *session) runResponse(ctx context.Context, llm provider.LLMClient, tts p
 	_ = s.writeEvent(eventResponseDone, responseDonePayload{
 		Status:     status,
 		Text:       replyText,
-		ChunkCount: chunkCount,
-		AudioBytes: audioBytes,
+		ChunkCount: ttsResult.chunkCount,
+		AudioBytes: ttsResult.audioBytes,
 	})
+}
+
+func (s *session) runRealtimeTTS(ctx context.Context, tts provider.TTSClient, cfg sessionConfig, format provider.AudioFormat, trace *debugtrace.Handle, segments <-chan string) realtimeTTSResult {
+	result := realtimeTTSResult{format: format}
+	traceStarted := false
+
+	for segment := range segments {
+		segment = strings.TrimSpace(segment)
+		if segment == "" {
+			continue
+		}
+		if ctx.Err() != nil {
+			result.err = ctx.Err()
+			return result
+		}
+
+		if trace != nil {
+			if !traceStarted {
+				trace.StartTTS(segment, result.format)
+				traceStarted = true
+			} else {
+				trace.AddEvent("tts.segment", previewDetail(segment, 96))
+			}
+		}
+		s.rememberRecentSpeech(segment)
+
+		streamID := s.nextID("tts")
+		segmentFormat := result.format
+		segmentStarted := false
+		segmentChunks := 0
+		segmentErr := tts.SynthesizeStream(ctx, provider.TTSRequest{
+			DeviceID:  cfg.ClientID,
+			SessionID: cfg.SessionID,
+			Text:      segment,
+			Format:    segmentFormat,
+		}, func(chunk provider.AudioChunk) error {
+			segmentFormat = mergeAudioFormat(segmentFormat, chunk.Format)
+			result.format = mergeAudioFormat(result.format, chunk.Format)
+			if !segmentStarted {
+				if err := s.writeEvent(protocol.EventTTSStart, protocol.AudioStartPayload{
+					StreamID:     streamID,
+					Codec:        segmentFormat.Codec,
+					SampleRateHz: segmentFormat.SampleRateHz,
+					Channels:     segmentFormat.Channels,
+				}); err != nil {
+					return err
+				}
+				segmentStarted = true
+			}
+			segmentChunks++
+			result.chunkCount++
+			result.audioBytes += len(chunk.Data)
+			if trace != nil {
+				trace.AddTTSChunk(chunk.Data)
+			}
+			return s.conn.WriteBinary(chunk.Data)
+		})
+		if segmentErr != nil {
+			result.err = segmentErr
+			if segmentStarted {
+				_ = s.writeEvent(protocol.EventTTSStop, protocol.AudioStopPayload{
+					StreamID: streamID,
+					LastSeq:  segmentChunks,
+				})
+			}
+			return result
+		}
+		if segmentChunks == 0 {
+			result.err = fmt.Errorf("tts produced no audio for segment")
+			return result
+		}
+		if segmentStarted {
+			_ = s.writeEvent(protocol.EventTTSStop, protocol.AudioStopPayload{
+				StreamID: streamID,
+				LastSeq:  segmentChunks,
+			})
+		}
+	}
+
+	return result
+}
+
+func (s *realtimeTTSSegmenter) Add(text string) []string {
+	if text == "" {
+		return nil
+	}
+	var segments []string
+	for _, r := range text {
+		s.buf.WriteRune(r)
+		s.runeCount++
+		if isRealtimeTTSSentenceBreak(r) || r == '\n' || s.runeCount >= realtimeTTSMaxRunes || (s.runeCount >= realtimeTTSSoftMinRunes && isRealtimeTTSSoftBreak(r)) {
+			segments = appendFlushedRealtimeTTSSegment(segments, s)
+		}
+	}
+	return segments
+}
+
+func (s *realtimeTTSSegmenter) Flush() []string {
+	return appendFlushedRealtimeTTSSegment(nil, s)
+}
+
+func appendFlushedRealtimeTTSSegment(segments []string, s *realtimeTTSSegmenter) []string {
+	segment := strings.TrimSpace(s.buf.String())
+	if segment != "" {
+		segments = append(segments, segment)
+	}
+	s.buf.Reset()
+	s.runeCount = 0
+	return segments
+}
+
+func isRealtimeTTSSentenceBreak(r rune) bool {
+	switch r {
+	case '.', '!', '?', ';', '。', '！', '？', '；':
+		return true
+	default:
+		return false
+	}
+}
+
+func isRealtimeTTSSoftBreak(r rune) bool {
+	switch r {
+	case ',', ':', '，', '、', '：':
+		return true
+	default:
+		return false
+	}
+}
+
+func isBlankASRText(text string) bool {
+	normalized := strings.TrimSpace(strings.ToLower(text))
+	if normalized == "" {
+		return true
+	}
+	normalized = strings.Trim(normalized, " .。!！?？")
+	switch normalized {
+	case "[blank_audio]", "blank_audio", "[silence]", "silence":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *session) rememberRecentSpeech(text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	now := s.now()
+	normalized := normalizeEchoText(text)
+	if len([]rune(normalized)) < echoMinRunes {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cutoff := now.Add(-recentSpeechWindow)
+	next := make([]recentSpeechText, 0, len(s.recentSpeech)+1)
+	for _, item := range s.recentSpeech {
+		if item.at.Before(cutoff) {
+			continue
+		}
+		next = append(next, item)
+	}
+	if len(next) > 0 && normalizeEchoText(next[len(next)-1].text) == normalized {
+		next[len(next)-1] = recentSpeechText{text: text, at: now}
+	} else {
+		next = append(next, recentSpeechText{text: text, at: now})
+	}
+	if len(next) > recentSpeechLimit {
+		next = next[len(next)-recentSpeechLimit:]
+	}
+	s.recentSpeech = next
+}
+
+func (s *session) recentSpeechPrompt(asrText string) string {
+	items := s.recentSpeechSnapshot()
+	if len(items) == 0 {
+		return ""
+	}
+	lines := make([]string, 0, len(items))
+	for _, item := range items {
+		lines = append(lines, "- "+item.text)
+	}
+	return fmt.Sprintf(voiceEchoContextPrompt, strings.Join(lines, "\n"), strings.TrimSpace(asrText))
+}
+
+func (s *session) recentSpeechSnapshot() []recentSpeechText {
+	now := s.now()
+	cutoff := now.Add(-recentSpeechWindow)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	items := make([]recentSpeechText, 0, len(s.recentSpeech))
+	for _, item := range s.recentSpeech {
+		if item.at.Before(cutoff) {
+			continue
+		}
+		items = append(items, item)
+	}
+	if len(items) != len(s.recentSpeech) {
+		s.recentSpeech = items
+	}
+	return append([]recentSpeechText(nil), items...)
+}
+
+func normalizeEchoText(text string) string {
+	var out strings.Builder
+	for _, r := range text {
+		r = unicode.ToLower(r)
+		if unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r) {
+			continue
+		}
+		out.WriteRune(r)
+	}
+	return out.String()
 }
 
 func (s *session) clearResponse() {
@@ -826,16 +1246,38 @@ func (s *session) cancelResponse() bool {
 
 func (s *session) cancelInput() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	cancelPartial := s.cancelPartialASRLocked()
 	s.inboundTracker = protocol.StreamTracker{}
 	s.inboundAudio = s.inboundAudio[:0]
 	s.inboundSeq = 0
 	s.speechActive = false
 	s.silenceBytes = 0
 	s.partialInFlight = false
+	s.partialCancel = nil
 	s.lastPartialAt = time.Time{}
 	s.lastPartialText = ""
 	s.lastPartialSize = 0
+	s.mu.Unlock()
+	if cancelPartial != nil {
+		cancelPartial()
+	}
+}
+
+func (s *session) cancelPartialASR() {
+	s.mu.Lock()
+	cancel := s.cancelPartialASRLocked()
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (s *session) cancelPartialASRLocked() context.CancelFunc {
+	cancel := s.partialCancel
+	s.partialRunID++
+	s.partialCancel = nil
+	s.partialInFlight = false
+	return cancel
 }
 
 func (s *session) nextID(prefix string) string {
@@ -998,6 +1440,21 @@ func voiceAssistantPrompt(metadata service.VoiceAssistantMetadata) string {
 	return "AgenDash Universal Voice Layer context JSON. Use it only to resolve scope, target, UI surface, and confirmation safety. Do not read raw JSON back to the user unless asked.\n" + payload
 }
 
+func sharedSystemPrompt(metadata service.VoiceAssistantMetadata) string {
+	if len(metadata.Metadata) == 0 {
+		return ""
+	}
+	value, ok := metadata.Metadata["shared_system_prompt"]
+	if !ok {
+		return ""
+	}
+	prompt, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(prompt)
+}
+
 func resolveResponseLanguage(current string, explicit string, metadata map[string]any, voiceAssistant service.VoiceAssistantMetadata) string {
 	if strings.TrimSpace(explicit) != "" {
 		return voicelang.Normalize(explicit)
@@ -1043,6 +1500,19 @@ func parseFormat(input map[string]any, fallback provider.AudioFormat) provider.A
 		SampleRateHz: sampleRate,
 		Channels:     channels,
 	}
+}
+
+func mergeAudioFormat(current provider.AudioFormat, next provider.AudioFormat) provider.AudioFormat {
+	if strings.TrimSpace(next.Codec) != "" {
+		current.Codec = next.Codec
+	}
+	if next.SampleRateHz > 0 {
+		current.SampleRateHz = next.SampleRateHz
+	}
+	if next.Channels > 0 {
+		current.Channels = next.Channels
+	}
+	return current
 }
 
 func intValue(value any, fallback int) int {

@@ -57,8 +57,8 @@ func LoadConfig() (Config, error) {
 		DefaultProviderBaseURL: envOrDefault("AGENSENSE_DEFAULT_PROVIDER_BASE_URL", "http://127.0.0.1:8081/v1"),
 		DefaultProviderAPIKey:  envOrDefault("AGENSENSE_DEFAULT_PROVIDER_API_KEY", ""),
 		DefaultASRModel:        envOrDefault("AGENSENSE_DEFAULT_ASR_MODEL", "whisper-1"),
-		DefaultLLMModel:        envOrDefault("AGENSENSE_DEFAULT_LLM_MODEL", "gemma-4-e2b-it"),
-		DefaultTTSModel:        envOrDefault("AGENSENSE_DEFAULT_TTS_MODEL", "tts-1"),
+		DefaultLLMModel:        envOrDefault("AGENSENSE_DEFAULT_LLM_MODEL", "hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m"),
+		DefaultTTSModel:        envOrDefault("AGENSENSE_DEFAULT_TTS_MODEL", "faster-qwen3-tts"),
 		RetryHintSec:           envOrDefaultInt("AGENSENSE_RETRY_HINT_SEC", 30),
 	}
 

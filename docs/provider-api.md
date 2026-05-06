@@ -16,8 +16,8 @@ By default, AgenSense seeds the `demo-user-key` namespace with a LocalAI-oriente
 
 - base URL: `http://127.0.0.1:8081/v1`
 - ASR model: `whisper-1`
-- LLM model: `gemma-4-e2b-it`
-- TTS model: `tts-1`
+- LLM model: `hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m`
+- TTS model: `faster-qwen3-tts`
 
 See [LocalAI setup](localai.md) for the recommended local address layout.
 
@@ -52,10 +52,10 @@ Provider credentials are currently persisted as plain text in the local JSON sto
   "asr_model": "whisper-1",
   "llm_base_url": "http://127.0.0.1:8081/v1",
   "llm_api_key": "******",
-  "llm_model": "gpt-4o-mini",
+  "llm_model": "hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m",
   "tts_base_url": "http://127.0.0.1:8081/v1",
   "tts_api_key": "******",
-  "tts_model": "tts-1",
+  "tts_model": "faster-qwen3-tts",
   "default": true
 }
 ```
@@ -108,6 +108,8 @@ Response:
 }
 ```
 
+AgenSense normalizes Chinese ASR transcripts to Simplified Chinese by default. Set `AGENSENSE_ASR_CHINESE_SCRIPT=original` to keep the upstream provider output unchanged, or `zh-Hant` if a deployment intentionally wants Traditional Chinese. OpenAI-compatible ASR requests also include a default prompt asking for Simplified Chinese; override it with `AGENSENSE_OPENAI_ASR_PROMPT` or set `AGENSENSE_OPENAI_ASR_LANGUAGE` for providers that honor a language hint.
+
 ## Direct LLM
 
 `POST /v1/llm/chat`
@@ -143,6 +145,18 @@ Response:
 
 `voice_assistant`, `ui_context`, `assistant_intent`, and `metadata` are optional. AgenSense records them for traceability and protocol alignment, but it does not implicitly rewrite `messages`.
 
+For live text output, use `POST /v1/llm/chat/stream` with the same request body. It returns Server-Sent Events:
+
+```text
+event: delta
+data: {"text":"partial text"}
+
+event: done
+data: {"provider_profile_id":"default","text":"full text","deltas":["partial text"]}
+```
+
+Streaming text and tool-use metadata can be used together. AgenSense currently streams model text while preserving Universal Voice Layer / MCP metadata in traces; a full tool execution loop should be implemented by the client or a future tool runtime.
+
 ## Direct TTS
 
 `POST /v1/tts/synthesize`
@@ -177,7 +191,9 @@ Response:
 }
 ```
 
-Some OpenAI-compatible TTS services return a WAV container even when PCM is requested. AgenSense detects WAV headers and reports `format.codec=wav`.
+Some OpenAI-compatible TTS services return a WAV container even when PCM is requested. AgenSense unwraps 16-bit PCM WAV responses into `pcm_s16le` frames and reports the actual sample rate and channel count.
+
+Set `AGENSENSE_OPENAI_TTS_VOICE=Serena` for the recommended LocalAI `faster-qwen3-tts` validation path. Voice support is provider-specific; set `AGENSENSE_OPENAI_TTS_VOICE=none` if your backend rejects the voice field. `AGENSENSE_OPENAI_TTS_SENTENCE_STREAM=1` enables sentence-level chunking for long responses, but the default keeps a single provider request for maximum TTS quality.
 
 ## Provider Selection
 

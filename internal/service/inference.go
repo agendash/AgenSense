@@ -68,6 +68,10 @@ func (s *RuntimeInferenceService) Transcribe(ctx context.Context, apiKey string,
 }
 
 func (s *RuntimeInferenceService) Chat(ctx context.Context, apiKey string, req ChatInferenceRequest) (ChatInferenceResponse, error) {
+	return s.ChatStream(ctx, apiKey, req, nil)
+}
+
+func (s *RuntimeInferenceService) ChatStream(ctx context.Context, apiKey string, req ChatInferenceRequest, cb ChatDeltaCallback) (ChatInferenceResponse, error) {
 	if s.registry == nil || s.factory == nil {
 		return ChatInferenceResponse{}, ErrInvalidInput
 	}
@@ -101,6 +105,9 @@ func (s *RuntimeInferenceService) Chat(ctx context.Context, apiKey string, req C
 		deltas = append(deltas, delta.Text)
 		builder.WriteString(delta.Text)
 		handle.AddLLMDelta(delta.Text)
+		if cb != nil {
+			return cb(delta.Text)
+		}
 		return nil
 	})
 	if err != nil {
@@ -157,6 +164,7 @@ func (s *RuntimeInferenceService) Synthesize(ctx context.Context, apiKey string,
 	if format.Channels <= 0 {
 		format.Channels = 1
 	}
+	actualFormat := format
 	handle.StartTTS(req.Text, format.toProviderFormat())
 	err = client.SynthesizeStream(ctx, provider.TTSRequest{
 		DeviceID:  firstNonEmpty(strings.TrimSpace(req.ClientID), NamespaceFromAPIKey(apiKey)),
@@ -164,6 +172,7 @@ func (s *RuntimeInferenceService) Synthesize(ctx context.Context, apiKey string,
 		Text:      req.Text,
 		Format:    format.toProviderFormat(),
 	}, func(chunk provider.AudioChunk) error {
+		actualFormat = mergeProviderAudioFormat(actualFormat, chunk.Format)
 		audio = append(audio, chunk.Data...)
 		chunkCount++
 		handle.AddTTSChunk(chunk.Data)
@@ -173,7 +182,7 @@ func (s *RuntimeInferenceService) Synthesize(ctx context.Context, apiKey string,
 		handle.Fail(err)
 		return TTSInferenceResponse{}, err
 	}
-	format = normalizeSynthesisFormat(format, audio)
+	format = normalizeSynthesisFormat(actualFormat, audio)
 	handle.CompleteTTS(format.toProviderFormat())
 	handle.Complete()
 	return TTSInferenceResponse{
@@ -182,6 +191,19 @@ func (s *RuntimeInferenceService) Synthesize(ctx context.Context, apiKey string,
 		AudioBase64:       base64.StdEncoding.EncodeToString(audio),
 		ChunkCount:        chunkCount,
 	}, nil
+}
+
+func mergeProviderAudioFormat(current AudioFormatInput, next provider.AudioFormat) AudioFormatInput {
+	if strings.TrimSpace(next.Codec) != "" {
+		current.Codec = next.Codec
+	}
+	if next.SampleRateHz > 0 {
+		current.SampleRateHz = next.SampleRateHz
+	}
+	if next.Channels > 0 {
+		current.Channels = next.Channels
+	}
+	return current
 }
 
 func normalizeSynthesisFormat(format AudioFormatInput, audio []byte) AudioFormatInput {

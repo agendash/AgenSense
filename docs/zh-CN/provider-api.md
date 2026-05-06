@@ -55,10 +55,10 @@ Authorization: Bearer <AGENSENSE_API_KEY>
   "asr_model": "whisper-1",
   "llm_base_url": "http://127.0.0.1:8081/v1",
   "llm_api_key": "******",
-  "llm_model": "gpt-4o-mini",
+  "llm_model": "hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m",
   "tts_base_url": "http://127.0.0.1:8081/v1",
   "tts_api_key": "******",
-  "tts_model": "tts-1",
+  "tts_model": "faster-qwen3-tts",
   "default": true
 }
 ```
@@ -113,6 +113,8 @@ Authorization: Bearer <AGENSENSE_API_KEY>
 }
 ```
 
+AgenSense 默认会把中文 ASR 转写归一成简体中文，避免上游模型偶尔输出繁体后影响后续 LLM / TTS。需要保留上游原文时，可以设置 `AGENSENSE_ASR_CHINESE_SCRIPT=original`；如果部署目标明确需要繁体，也可以设置为 `zh-Hant`。OpenAI-compatible ASR 请求会默认带上一段“中文使用简体”的提示词，可通过 `AGENSENSE_OPENAI_ASR_PROMPT` 覆盖，也可以用 `AGENSENSE_OPENAI_ASR_LANGUAGE` 传递 provider 支持的语言 hint。
+
 ### `POST /v1/llm/chat`
 
 请求体示例：
@@ -160,6 +162,18 @@ Authorization: Bearer <AGENSENSE_API_KEY>
   "deltas": ["...", "..."]
 }
 ```
+
+如果需要实时显示模型输出，可以使用 `POST /v1/llm/chat/stream`，请求体与 `/v1/llm/chat` 相同，返回 Server-Sent Events：
+
+```text
+event: delta
+data: {"text":"partial text"}
+
+event: done
+data: {"provider_profile_id":"default","text":"full text","deltas":["partial text"]}
+```
+
+流式文本和 tool-use metadata 可以同时使用。当前 AgenSense 会流式转发模型文本，并把 Universal Voice Layer / MCP metadata 保存到 trace；真正执行工具、回填 tool result、再续写回答的闭环，仍应由客户端或后续工具运行时承接。
 
 ### `POST /v1/tts/synthesize`
 
@@ -218,6 +232,8 @@ Authorization: Bearer <AGENSENSE_API_KEY>
 - ASR：调用 `/audio/transcriptions`
 - LLM：调用 `/chat/completions` 的流式输出
 - TTS：调用 `/audio/speech`
+
+推荐的 LocalAI `faster-qwen3-tts` 验证链路可以设置 `AGENSENSE_OPENAI_TTS_VOICE=Serena`。voice 支持取决于具体后端；如果后端拒绝 voice 字段，可以设置 `AGENSENSE_OPENAI_TTS_VOICE=none`。部分 LocalAI TTS 即使请求 PCM 也会返回 WAV 容器；AgenSense 会把 16-bit WAV 拆成 `pcm_s16le`，并回传真实采样率和声道数。
 
 ## 长连接说明
 

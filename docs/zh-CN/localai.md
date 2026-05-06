@@ -52,8 +52,8 @@ http://127.0.0.1:8081
 ## 默认模型名
 
 - ASR：`whisper-1`
-- LLM：`gemma-4-e2b-it`
-- TTS：`tts-1`
+- LLM：`hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m`
+- TTS：`faster-qwen3-tts`
 
 如果你的 LocalAI 模型 ID 不同，用环境变量覆盖：
 
@@ -62,6 +62,16 @@ export AGENSENSE_DEFAULT_ASR_MODEL="your-asr-model"
 export AGENSENSE_DEFAULT_LLM_MODEL="your-llm-model"
 export AGENSENSE_DEFAULT_TTS_MODEL="your-tts-model"
 ```
+
+推荐的本地双语 TTS 路径是 LocalAI gallery 里的 `faster-qwen3-tts`：
+
+```sh
+export AGENSENSE_DEFAULT_TTS_MODEL="faster-qwen3-tts"
+export AGENSENSE_OPENAI_TTS_VOICE="Serena"
+export AGENSENSE_OPENAI_TTS_RESPONSE_FORMAT="pcm"
+```
+
+`faster-qwen3-tts` 的中英文稳定性更适合作为默认验证链路。voice 支持取决于具体后端：当前 LocalAI 测试栈可以接受 `Serena` 这类命名声音，但有些后端会拒绝 `alloy` 这类通用 OpenAI voice 名称。如果后端不接受 voice 字段，可以设置 `AGENSENSE_OPENAI_TTS_VOICE=none`。AgenSense 会把 LocalAI 返回的 16-bit WAV 自动拆成 `pcm_s16le`，并把真实采样率回传给客户端。
 
 ## API Key
 

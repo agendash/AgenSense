@@ -142,6 +142,8 @@ type ChatInferenceResponse struct {
 	AssistantIntent   *VoiceAssistantIntent `json:"assistant_intent,omitempty"`
 }
 
+type ChatDeltaCallback func(delta string) error
+
 // TTSInferenceRequest runs one text-to-speech request.
 type TTSInferenceRequest struct {
 	ProviderProfileID string           `json:"provider_profile_id,omitempty"`
@@ -173,5 +175,6 @@ type ProviderRegistry interface {
 type InferenceService interface {
 	Transcribe(ctx context.Context, apiKey string, req ASRInferenceRequest) (ASRInferenceResponse, error)
 	Chat(ctx context.Context, apiKey string, req ChatInferenceRequest) (ChatInferenceResponse, error)
+	ChatStream(ctx context.Context, apiKey string, req ChatInferenceRequest, cb ChatDeltaCallback) (ChatInferenceResponse, error)
 	Synthesize(ctx context.Context, apiKey string, req TTSInferenceRequest) (TTSInferenceResponse, error)
 }

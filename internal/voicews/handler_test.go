@@ -57,6 +57,7 @@ func TestVoiceWebSocketRoundTrip(t *testing.T) {
 		"session_id":          "voice-session-001",
 		"provider_profile_id": "default",
 		"response_language":   "zh-Hans",
+		"auto_response":       true,
 		"voice_assistant": map[string]any{
 			"ui_context": map[string]any{
 				"current_scene": "chat",
@@ -134,17 +135,6 @@ func TestVoiceWebSocketRoundTrip(t *testing.T) {
 	if asr.Text == "" {
 		t.Fatal("expected asr.final text")
 	}
-
-	writeClientTextEvent(t, conn, eventResponseCreate, map[string]any{
-		"text": asr.Text,
-		"ui_context": map[string]any{
-			"current_scene": "chat",
-			"input_context": map[string]any{
-				"id":    "composer",
-				"label": "Focused composer",
-			},
-		},
-	})
 
 	seen := map[string]bool{}
 	binaryFrames := 0
