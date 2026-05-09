@@ -50,20 +50,41 @@ Respond for speech playback, not a terminal or chat transcript.
 - Keep the reply to one short sentence unless the user explicitly asks for detail.
 - Target 28 Chinese characters or 16 English words.
 - Say the outcome, next action, or blocking issue directly.
+- Treat the user's message as a raw ASR transcript: it may be colloquial, fragmented, misheard, or contain filler words.
+- Silently infer the user's real intent before answering; preserve names, numbers, commands, file paths, model names, and technical terms exactly when they matter.
+- If the transcript appears to contain acoustic echo from recent assistant speech, ignore the echoed wording and answer only the user's new intent.
+- If the transcript is mostly echo or too ambiguous to act on, give a very short clarification instead of advancing the task.
 - Do not output markdown, bullet lists, JSON, XML, ANSI escapes, or tool-call notation.
 - Do not narrate hidden reasoning or internal implementation details.
 - If no remote code agent is focused, stay in local assistant mode and say that a focused agent is required for remote execution.
 - If the request clearly sounds like an approval, scene switch, or playback command, keep the wording brief and confirmation-oriented.`
 
 const voiceEchoContextPrompt = `Acoustic echo guard:
-The user's ASR transcript may contain words from your recent spoken output.
-Recent assistant speech:
+The latest user text is a raw ASR transcript. It may include casual speech, partial phrases, recognition errors, or acoustic echo from assistant audio that was just played.
+Compare the assistant speech below with the latest ASR transcript. If the ASR mostly repeats assistant speech, treat it as echo and do not execute or advance that repeated content.
+If the ASR includes both echo and a new user request, discard only the echoed portion and answer the new request.
+Preserve exact names, numbers, paths, commands, and model identifiers from the user's new intent.
+
+Assistant speech already played:
 %s
 
-Latest ASR transcript:
+Raw latest ASR transcript:
 %s
 
-Ignore repeated assistant speech as acoustic echo. Answer only the user's new intent. Do not answer your own prior wording.`
+Return a natural spoken reply for the inferred user intent. Keep it brief; ask one short clarification if the new intent is not stable enough.`
+
+const mcpProposalSystemPrompt = `You are an MCP call planner for a voice gateway.
+Convert the latest raw ASR transcript into exactly one proposed MCP tool call for the client to review or execute later.
+Return only a single JSON object, with no markdown or prose.
+The JSON shape is:
+{"tool_name":"exact available tool name","arguments":{},"confidence":0.0,"requires_confirmation":true,"reason":"short reason"}
+Rules:
+- tool_name must exactly match one available tool.
+- Preserve user names, numbers, dates, locations, code identifiers, commands, and paths.
+- Put the original transcript in arguments.raw_text unless the chosen tool schema clearly has a better field.
+- If the transcript lacks required scheduling details, keep the call as a candidate and include missing_required_fields in arguments.
+- If no specialized tool fits, choose a capture-text or note-like tool when available; otherwise choose the safest available tool.
+- Never claim execution; this is only a proposed MCP call.`
 
 type sessionDeps struct {
 	conn     *wsconn.Conn
@@ -204,6 +225,18 @@ type responseDonePayload struct {
 	Text       string `json:"text,omitempty"`
 	ChunkCount int    `json:"chunk_count,omitempty"`
 	AudioBytes int    `json:"audio_bytes,omitempty"`
+}
+
+type mcpProposalModelOutput struct {
+	ToolName             string         `json:"tool_name"`
+	Tool                 string         `json:"tool"`
+	Name                 string         `json:"name"`
+	Arguments            map[string]any `json:"arguments"`
+	Args                 map[string]any `json:"args"`
+	Transcript           string         `json:"transcript"`
+	Confidence           *float64       `json:"confidence"`
+	RequiresConfirmation bool           `json:"requires_confirmation"`
+	Reason               string         `json:"reason"`
 }
 
 type vadStatePayload struct {
@@ -790,6 +823,9 @@ func (s *session) runResponse(ctx context.Context, llm provider.LLMClient, tts p
 		}
 	}
 	messages = append(messages, provider.ChatMessage{Role: "user", Content: text})
+	if err := s.proposeMCPCall(ctx, llm, cfg, text, voiceAssistant, trace); err != nil && trace != nil {
+		trace.AddEvent("mcp.call.proposed_failed", previewDetail(err.Error(), 160))
+	}
 	if trace != nil {
 		trace.AddEvent("response.create", previewDetail(text, 96))
 		trace.AddEvent("response.language", voicelang.Label(cfg.ResponseLanguage, text))
@@ -1005,6 +1041,133 @@ func (s *session) runResponse(ctx context.Context, llm provider.LLMClient, tts p
 		ChunkCount: ttsResult.chunkCount,
 		AudioBytes: ttsResult.audioBytes,
 	})
+}
+
+func (s *session) proposeMCPCall(ctx context.Context, llm provider.LLMClient, cfg sessionConfig, transcript string, voiceAssistant service.VoiceAssistantMetadata, trace *debugtrace.Handle) error {
+	transcript = strings.TrimSpace(transcript)
+	if transcript == "" || isBlankASRText(transcript) {
+		return nil
+	}
+	tools := mcpToolsFromVoiceAssistant(voiceAssistant)
+	if len(tools) == 0 {
+		return nil
+	}
+
+	proposal, err := buildMCPProposal(ctx, llm, cfg, transcript, voiceAssistant, tools)
+	if err != nil {
+		if trace != nil {
+			trace.AddEvent("mcp.call.fallback", previewDetail(err.Error(), 160))
+		}
+		proposal = fallbackMCPProposal(transcript, tools, err)
+	}
+	if proposal.ProposalID == "" {
+		proposal.ProposalID = s.nextID("mcp")
+	}
+	if proposal.Transcript == "" {
+		proposal.Transcript = transcript
+	}
+	if proposal.Arguments == nil {
+		proposal.Arguments = map[string]any{}
+	}
+	if trace != nil {
+		trace.AddEvent("mcp.call.proposed", previewDetail(proposal.ToolName, 96))
+	}
+	return s.writeEvent(protocol.EventMCPCallProposed, proposal)
+}
+
+func buildMCPProposal(ctx context.Context, llm provider.LLMClient, cfg sessionConfig, transcript string, voiceAssistant service.VoiceAssistantMetadata, tools []string) (protocol.MCPCallProposedPayload, error) {
+	if llm == nil {
+		return protocol.MCPCallProposedPayload{}, fmt.Errorf("llm client is not configured")
+	}
+	planningCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+
+	toolsJSON := compactJSON(tools)
+	contextJSON := compactJSON(mcpPlanningContext(voiceAssistant))
+	var raw strings.Builder
+	err := llm.ChatStream(planningCtx, provider.ChatRequest{
+		DeviceID:  cfg.ClientID,
+		SessionID: cfg.SessionID,
+		Messages: []provider.ChatMessage{
+			{Role: "system", Content: mcpProposalSystemPrompt},
+			{Role: "system", Content: "Available MCP tools JSON:\n" + toolsJSON},
+			{Role: "system", Content: "Client context JSON:\n" + contextJSON},
+			{Role: "user", Content: transcript},
+		},
+	}, func(delta provider.ChatDelta) error {
+		raw.WriteString(delta.Text)
+		return nil
+	})
+	if err != nil {
+		return protocol.MCPCallProposedPayload{}, err
+	}
+	return parseMCPProposal(raw.String(), transcript, tools)
+}
+
+func parseMCPProposal(raw string, transcript string, tools []string) (protocol.MCPCallProposedPayload, error) {
+	data, err := extractJSONObject(raw)
+	if err != nil {
+		return protocol.MCPCallProposedPayload{}, err
+	}
+	var parsed mcpProposalModelOutput
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return protocol.MCPCallProposedPayload{}, fmt.Errorf("invalid mcp proposal JSON: %w", err)
+	}
+	toolName := strings.TrimSpace(parsed.ToolName)
+	if toolName == "" {
+		toolName = strings.TrimSpace(parsed.Tool)
+	}
+	if toolName == "" {
+		toolName = strings.TrimSpace(parsed.Name)
+	}
+	if !mcpToolAllowed(toolName, tools) {
+		return protocol.MCPCallProposedPayload{}, fmt.Errorf("mcp proposal selected unavailable tool %q", toolName)
+	}
+
+	args := parsed.Arguments
+	if len(args) == 0 {
+		args = parsed.Args
+	}
+	if args == nil {
+		args = map[string]any{}
+	}
+	if _, ok := args["raw_text"]; !ok {
+		args["raw_text"] = transcript
+	}
+
+	confidence := 0.7
+	if parsed.Confidence != nil {
+		confidence = *parsed.Confidence
+	}
+	if confidence < 0 || confidence > 1 {
+		return protocol.MCPCallProposedPayload{}, fmt.Errorf("mcp proposal confidence %.3f is outside 0..1", confidence)
+	}
+	return protocol.MCPCallProposedPayload{
+		ToolName:             toolName,
+		Arguments:            args,
+		Transcript:           firstNonEmpty(parsed.Transcript, transcript),
+		Confidence:           confidence,
+		RequiresConfirmation: parsed.RequiresConfirmation,
+		Reason:               strings.TrimSpace(parsed.Reason),
+	}, nil
+}
+
+func fallbackMCPProposal(transcript string, tools []string, cause error) protocol.MCPCallProposedPayload {
+	toolName := safestMCPTool(tools)
+	reason := "LLM did not return a valid MCP proposal; falling back to raw transcript capture."
+	if cause != nil && strings.TrimSpace(cause.Error()) != "" {
+		reason = reason + " " + cause.Error()
+	}
+	return protocol.MCPCallProposedPayload{
+		ToolName: toolName,
+		Arguments: map[string]any{
+			"raw_text": transcript,
+		},
+		Transcript:           transcript,
+		Confidence:           0.35,
+		RequiresConfirmation: true,
+		Reason:               reason,
+	}
 }
 
 func (s *session) runRealtimeTTS(ctx context.Context, tts provider.TTSClient, cfg sessionConfig, format provider.AudioFormat, trace *debugtrace.Handle, segments <-chan string) realtimeTTSResult {
@@ -1453,6 +1616,118 @@ func sharedSystemPrompt(metadata service.VoiceAssistantMetadata) string {
 		return ""
 	}
 	return strings.TrimSpace(prompt)
+}
+
+func mcpToolsFromVoiceAssistant(metadata service.VoiceAssistantMetadata) []string {
+	seen := map[string]bool{}
+	var tools []string
+	for _, source := range []map[string]any{metadata.Metadata, metadata.UIContext} {
+		for _, key := range []string{"mcp_tools", "available_mcp_tools", "tools"} {
+			if source == nil {
+				continue
+			}
+			tools = appendMCPTools(tools, seen, source[key])
+		}
+	}
+	if metadata.AssistantIntent != nil {
+		for _, key := range []string{"mcp_tools", "available_mcp_tools", "tools"} {
+			tools = appendMCPTools(tools, seen, metadata.AssistantIntent.Args[key])
+		}
+	}
+	return tools
+}
+
+func appendMCPTools(out []string, seen map[string]bool, value any) []string {
+	switch typed := value.(type) {
+	case string:
+		return appendMCPTool(out, seen, typed)
+	case []string:
+		for _, item := range typed {
+			out = appendMCPTool(out, seen, item)
+		}
+	case []any:
+		for _, item := range typed {
+			out = appendMCPTools(out, seen, item)
+		}
+	case map[string]any:
+		for _, key := range []string{"tool_name", "name", "id"} {
+			if name, ok := typed[key].(string); ok {
+				out = appendMCPTool(out, seen, name)
+			}
+		}
+	}
+	return out
+}
+
+func appendMCPTool(out []string, seen map[string]bool, name string) []string {
+	name = strings.TrimSpace(name)
+	if name == "" || seen[name] {
+		return out
+	}
+	seen[name] = true
+	return append(out, name)
+}
+
+func mcpPlanningContext(metadata service.VoiceAssistantMetadata) map[string]any {
+	out := map[string]any{
+		"contract":         metadata.Contract,
+		"ui_context":       metadata.UIContext,
+		"assistant_intent": metadata.AssistantIntent,
+	}
+	if len(metadata.Metadata) > 0 {
+		clean := make(map[string]any, len(metadata.Metadata))
+		for key, value := range metadata.Metadata {
+			if key == "shared_system_prompt" {
+				continue
+			}
+			clean[key] = value
+		}
+		out["metadata"] = clean
+	}
+	return out
+}
+
+func extractJSONObject(raw string) ([]byte, error) {
+	raw = strings.TrimSpace(raw)
+	start := strings.Index(raw, "{")
+	end := strings.LastIndex(raw, "}")
+	if start < 0 || end < start {
+		return nil, fmt.Errorf("mcp proposal response did not contain a JSON object")
+	}
+	return []byte(raw[start : end+1]), nil
+}
+
+func mcpToolAllowed(toolName string, tools []string) bool {
+	for _, tool := range tools {
+		if toolName == tool {
+			return true
+		}
+	}
+	return false
+}
+
+func safestMCPTool(tools []string) string {
+	if len(tools) == 0 {
+		return ""
+	}
+	for _, preferred := range []string{"capture_text", "create_note", "note", "memory"} {
+		for _, tool := range tools {
+			if strings.Contains(strings.ToLower(tool), preferred) {
+				return tool
+			}
+		}
+	}
+	return tools[0]
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func resolveResponseLanguage(current string, explicit string, metadata map[string]any, voiceAssistant service.VoiceAssistantMetadata) string {

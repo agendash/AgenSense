@@ -110,6 +110,7 @@ The current mock-friendly device path can emit:
 - `asr.final`
 - `llm.delta`
 - `llm.done`
+- `mcp.call.proposed`
 - `tts.start`
 - binary TTS audio frames
 - `tts.stop`
@@ -122,6 +123,56 @@ The voice WebSocket path has its own AgenDash-style event set and is covered by 
 `action.execute` is used for UI, HID, or local device actions.
 
 Clients should treat unknown action types as ignorable unless a future capability negotiation explicitly requires support.
+
+## MCP Call Proposals
+
+`mcp.call.proposed` is emitted by the voice WebSocket path when the client
+declares available MCP tools in `voice_assistant.metadata.mcp_tools`,
+`voice_assistant.metadata.available_mcp_tools`, `voice_assistant.ui_context.mcp_tools`,
+or `voice_assistant.ui_context.available_mcp_tools`.
+
+The event proposes a tool call but does not execute it. Clients or a trusted
+gateway decide whether to confirm, execute, rewrite, or ignore the call.
+
+Example `session.update` excerpt:
+
+```json
+{
+  "type": "session.update",
+  "payload": {
+    "voice_assistant": {
+      "contract": "joyce_voice_capture_v1",
+      "ui_context": {
+        "available_mcp_tools": [
+          "joyce.capture_text",
+          "joyce.create_reminder_candidate"
+        ]
+      }
+    }
+  }
+}
+```
+
+Example server event:
+
+```json
+{
+  "type": "mcp.call.proposed",
+  "session_id": "voice-session-001",
+  "payload": {
+    "proposal_id": "mcp-000001",
+    "tool_name": "joyce.create_reminder_candidate",
+    "arguments": {
+      "raw_text": "今天下午四点提醒我接孩子",
+      "title": "接孩子"
+    },
+    "transcript": "今天下午四点提醒我接孩子",
+    "confidence": 0.82,
+    "requires_confirmation": true,
+    "reason": "The transcript contains a reminder request."
+  }
+}
+```
 
 ## Compatibility Rules
 

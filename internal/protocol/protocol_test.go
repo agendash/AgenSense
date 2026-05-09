@@ -81,6 +81,21 @@ func TestErrorAndActionValidation(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("NewEvent(action.execute) error = %v", err)
 	}
+	if _, err := NewEvent(EventMCPCallProposed, "", "sess-001", MCPCallProposedPayload{
+		ProposalID: "mcp-001",
+		ToolName:   "joyce.capture_text",
+		Arguments:  map[string]any{"raw_text": "提醒我接孩子"},
+		Confidence: 0.75,
+	}); err != nil {
+		t.Fatalf("NewEvent(mcp.call.proposed) error = %v", err)
+	}
+	if _, err := NewEvent(EventMCPCallProposed, "", "sess-001", MCPCallProposedPayload{
+		ProposalID: "mcp-002",
+		ToolName:   "joyce.capture_text",
+		Confidence: 1.25,
+	}); err == nil {
+		t.Fatal("expected mcp.call.proposed confidence validation error")
+	}
 }
 
 func TestStreamTracker(t *testing.T) {

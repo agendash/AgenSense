@@ -111,6 +111,14 @@ Session setup:
     "session_id": "voice-session-001",
     "provider_profile_id": "default",
     "response_language": "auto",
+    "voice_assistant": {
+      "ui_context": {
+        "available_mcp_tools": [
+          "joyce.capture_text",
+          "joyce.create_reminder_candidate"
+        ]
+      }
+    },
     "format": {
       "codec": "pcm_s16le",
       "sample_rate_hz": 16000,
@@ -154,6 +162,7 @@ Expected server events include:
 - `asr.final`
 - `llm.delta`
 - `llm.done`
+- `mcp.call.proposed` when the session declares MCP tools in `voice_assistant`
 - `tts.start`
 - binary TTS audio frames
 - `tts.stop`
