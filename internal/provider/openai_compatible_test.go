@@ -103,6 +103,64 @@ func TestOpenAICompatibleLLMDropsDuplicatedOpeningDelta(t *testing.T) {
 	}
 }
 
+func TestOpenAICompatibleMultimodalBuildsImageRequest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			t.Fatalf("path = %q, want /chat/completions", r.URL.Path)
+		}
+		var body struct {
+			Model    string `json:"model"`
+			Stream   bool   `json:"stream"`
+			Messages []struct {
+				Role    string `json:"role"`
+				Content []struct {
+					Type     string `json:"type"`
+					Text     string `json:"text"`
+					ImageURL struct {
+						URL string `json:"url"`
+					} `json:"image_url"`
+				} `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		if body.Model != "test-vision" || body.Stream {
+			t.Fatalf("model/stream = %q/%v, want test-vision/false", body.Model, body.Stream)
+		}
+		if len(body.Messages) != 1 || len(body.Messages[0].Content) != 2 {
+			t.Fatalf("messages = %#v", body.Messages)
+		}
+		if body.Messages[0].Content[0].Type != "text" || body.Messages[0].Content[0].Text != "what is this" {
+			t.Fatalf("text part = %#v", body.Messages[0].Content[0])
+		}
+		imageURL := body.Messages[0].Content[1].ImageURL.URL
+		if !strings.HasPrefix(imageURL, "data:image/png;base64,") {
+			t.Fatalf("image url = %q, want image data url", imageURL)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"it is a test image"}}]}`))
+	}))
+	defer server.Close()
+
+	client := NewOpenAICompatibleMultimodal(server.Client(), server.URL, "", "test-vision")
+	got, err := client.Complete(context.Background(), MultimodalRequest{
+		Messages: []MultimodalMessage{{
+			Role: "user",
+			Content: []MultimodalContent{
+				{Type: "text", Text: "what is this"},
+				{Type: "image", Data: []byte{1, 2, 3}, MIMEType: "image/png"},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	if got.Text != "it is a test image" {
+		t.Fatalf("text = %q, want test reply", got.Text)
+	}
+}
+
 func TestOpenAICompatibleTTSOmitsVoiceForQwen3AndUnwrapsWAV(t *testing.T) {
 	t.Setenv("AGENSENSE_OPENAI_TTS_SENTENCE_STREAM", "0")
 

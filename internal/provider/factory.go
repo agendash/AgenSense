@@ -28,6 +28,10 @@ func (f *Factory) LLMClient(profile device.ProviderProfile) (LLMClient, error) {
 	return resolveLLMClient(profile, f.httpClient)
 }
 
+func (f *Factory) MultimodalClient(profile device.ProviderProfile) (MultimodalClient, error) {
+	return resolveMultimodalClient(profile, f.httpClient)
+}
+
 func (f *Factory) TTSClient(profile device.ProviderProfile) (TTSClient, error) {
 	return resolveTTSClient(profile, f.httpClient)
 }
@@ -53,6 +57,27 @@ func resolveLLMClient(profile device.ProviderProfile, httpClient *http.Client) (
 		return NewOpenAICompatibleLLM(httpClient, baseURL, profile.LLMAPIKey, profile.LLMModel), nil
 	default:
 		return nil, fmt.Errorf("provider: unsupported LLM base url %q", baseURL)
+	}
+}
+
+func resolveMultimodalClient(profile device.ProviderProfile, httpClient *http.Client) (MultimodalClient, error) {
+	baseURL := strings.TrimSpace(profile.MultimodalBaseURL)
+	apiKey := strings.TrimSpace(profile.MultimodalAPIKey)
+	model := strings.TrimSpace(profile.MultimodalModel)
+	if baseURL == "" {
+		baseURL = strings.TrimSpace(profile.LLMBaseURL)
+		apiKey = strings.TrimSpace(profile.LLMAPIKey)
+		if model == "" {
+			model = strings.TrimSpace(profile.LLMModel)
+		}
+	}
+	switch {
+	case baseURL == "", strings.HasPrefix(baseURL, "mock://"):
+		return MockMultimodal{}, nil
+	case strings.HasPrefix(baseURL, "http://"), strings.HasPrefix(baseURL, "https://"):
+		return NewOpenAICompatibleMultimodal(httpClient, baseURL, apiKey, model), nil
+	default:
+		return nil, fmt.Errorf("provider: unsupported multimodal base url %q", baseURL)
 	}
 }
 

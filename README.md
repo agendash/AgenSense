@@ -2,7 +2,7 @@
 
 Reusable AI sensing gateway for AgenDash, AgenLeash, hardware devices, and other clients.
 
-AgenSense does not run LLM, ASR, TTS, or VAD models on edge devices by default. It provides a stable gateway, provider registry, direct inference API, and device-compatible voice protocol so clients can share the same model configuration and runtime behavior.
+AgenSense does not run LLM, ASR, TTS, multimodal vision, or VAD models on edge devices by default. It provides a stable gateway, provider registry, direct inference API, and device-compatible voice protocol so clients can share the same model configuration and runtime behavior.
 
 Chinese documentation is available in [README.zh-CN.md](README.zh-CN.md).
 
@@ -10,7 +10,7 @@ Chinese documentation is available in [README.zh-CN.md](README.zh-CN.md).
 
 AgenSense is currently a local-first Go service with two supported access paths:
 
-- Shared service mode: clients use `Authorization: Bearer <AGENSENSE_API_KEY>` to register provider profiles and call ASR, LLM, and TTS APIs directly.
+- Shared service mode: clients use `Authorization: Bearer <AGENSENSE_API_KEY>` to register provider profiles and call ASR, LLM, multimodal vision, and TTS APIs directly.
 - Device compatibility mode: devices use bootstrap, device tokens, and a WebSocket voice session for ESP32/M5Stack/HID-style integrations.
 
 The shared service mode is the preferred path for desktop, GUI, service, and third-party clients. The device path remains useful for hardware integration and protocol regression.
@@ -23,10 +23,12 @@ The shared service mode is the preferred path for desktop, GUI, service, and thi
 - Direct APIs:
   - `POST /v1/asr/transcribe`
   - `POST /v1/llm/chat`
+  - `POST /v1/multimodal/chat`
+  - `POST /v1/vision/analyze`
   - `POST /v1/tts/synthesize`
 - Provider support:
   - `mock://` provider for local development
-  - OpenAI-compatible ASR, LLM, and TTS clients
+  - OpenAI-compatible ASR, LLM, multimodal, and TTS clients
 - Device compatibility APIs:
   - `POST /v1/bootstrap`
   - `GET /v1/device/config`
@@ -66,7 +68,7 @@ The default provider profile points at a local LocalAI server:
 - API key: `demo-user-key`
 - profile id: `default`
 - base URL: `http://127.0.0.1:8081/v1`
-- models: `whisper-1`, `hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m`, `faster-qwen3-tts`
+- models: ASR `whisper-1`, LLM `hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m`, multimodal `hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m`, TTS `faster-qwen3-tts`
 
 AgenSense uses port `8080`, so the documented LocalAI host port is `8081`. Inside the optional Docker Compose full stack, AgenSense reaches LocalAI at `http://localai:8080/v1`.
 
@@ -107,6 +109,9 @@ curl -sS \
     "llm_base_url":"'"${PROVIDER_BASE_URL}"'",
     "llm_api_key":"'"${PROVIDER_API_KEY}"'",
     "llm_model":"hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m",
+    "multimodal_base_url":"'"${PROVIDER_BASE_URL}"'",
+    "multimodal_api_key":"'"${PROVIDER_API_KEY}"'",
+    "multimodal_model":"hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m",
     "tts_base_url":"'"${PROVIDER_BASE_URL}"'",
     "tts_api_key":"'"${PROVIDER_API_KEY}"'",
     "tts_model":"faster-qwen3-tts",
@@ -178,6 +183,7 @@ Common environment variables:
 - `AGENSENSE_DISABLE_DEMO_SEED=true`: disables the built-in demo device seed
 - `AGENSENSE_DEFAULT_PROVIDER_BASE_URL`: default provider base URL, default `http://127.0.0.1:8081/v1`
 - `AGENSENSE_DEFAULT_PROVIDER_API_KEY`: default upstream provider API key
+- `AGENSENSE_DEFAULT_MULTIMODAL_MODEL`: optional default multimodal model; inherits `AGENSENSE_DEFAULT_LLM_MODEL` when unset
 - `AGENSENSE_ASR_CHINESE_SCRIPT`: Chinese transcript normalization, default `zh-Hans`; set `original` to keep upstream ASR text unchanged
 - `AGENSENSE_OPENAI_ASR_LANGUAGE`: optional OpenAI-compatible ASR language hint
 - `AGENSENSE_OPENAI_ASR_PROMPT`: optional OpenAI-compatible ASR prompt; the default asks Chinese transcripts to use Simplified Chinese

@@ -14,10 +14,11 @@ import (
 )
 
 const (
-	KindVoiceTurn = "voice_turn"
-	KindASR       = "asr"
-	KindLLM       = "llm"
-	KindTTS       = "tts"
+	KindVoiceTurn  = "voice_turn"
+	KindASR        = "asr"
+	KindLLM        = "llm"
+	KindMultimodal = "multimodal"
+	KindTTS        = "tts"
 
 	SourceHTTP = "http"
 	SourceWS   = "ws"

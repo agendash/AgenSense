@@ -30,18 +30,24 @@ const (
 	eventASRPartial     = "asr.partial"
 	eventVADState       = "vad.state"
 
-	defaultClientID         = "agendash-voice"
-	defaultSampleRateHz     = 16000
-	defaultChannels         = 1
-	partialMinWindow        = 1500 * time.Millisecond
-	partialMinGrowthFactor  = 1200 * time.Millisecond
-	vadSpeechThreshold      = 0.012
-	vadSilenceReleaseFactor = 220 * time.Millisecond
-	realtimeTTSMaxRunes     = 48
-	realtimeTTSSoftMinRunes = 36
-	recentSpeechWindow      = 20 * time.Second
-	recentSpeechLimit       = 4
-	echoMinRunes            = 8
+	defaultClientID                 = "agendash-voice"
+	defaultSampleRateHz             = 16000
+	defaultChannels                 = 1
+	partialMinWindow                = 1500 * time.Millisecond
+	partialMinGrowthFactor          = 1200 * time.Millisecond
+	vadSpeechThreshold              = 0.012
+	vadSilenceReleaseFactor         = 220 * time.Millisecond
+	realtimeTTSMaxRunes             = 48
+	realtimeTTSSoftMinRunes         = 36
+	recentSpeechWindow              = 20 * time.Second
+	recentSpeechLimit               = 4
+	echoMinRunes                    = 8
+	conversationIdleTimeout         = 3 * time.Minute
+	conversationTargetPct           = 70
+	conversationCompressPct         = 80
+	conversationOutputReserveTokens = 768
+	conversationRecentTurnLimit     = 6
+	conversationSummaryRuneLimit    = 2400
 )
 
 const voiceReplySystemPrompt = `You are AgenSense, a shared voice orchestration assistant for AgenDash clients.
@@ -145,6 +151,7 @@ type sessionConfig struct {
 	DeviceLabel       string
 	SessionID         string
 	ProviderProfileID string
+	LLMModel          string
 	ResponseLanguage  string
 	AutoRespond       bool
 	Format            provider.AudioFormat
@@ -175,6 +182,35 @@ type recentSpeechText struct {
 	at   time.Time
 }
 
+type conversationTurn struct {
+	userText      string
+	assistantText string
+	at            time.Time
+}
+
+type conversationMemory struct {
+	summary            string
+	turns              []conversationTurn
+	lastInteraction    time.Time
+	contextLimitTokens int
+}
+
+type conversationContextStats struct {
+	key            string
+	reset          bool
+	compressed     bool
+	model          string
+	contextLimit   int
+	historyBudget  int
+	includedTokens int
+	includedTurns  int
+}
+
+type conversationMemoryStore struct {
+	mu       sync.Mutex
+	sessions map[string]*conversationMemory
+}
+
 type completedSegment struct {
 	id            string
 	streamID      string
@@ -185,6 +221,8 @@ type completedSegment struct {
 	endLevel      float64
 	peakLevel     float64
 }
+
+var voiceConversationMemory = newConversationMemoryStore()
 
 type sessionUpdatePayload struct {
 	ClientID          string                          `json:"client_id,omitempty"`
@@ -400,6 +438,7 @@ func (s *session) handleSessionUpdate(ctx context.Context, input sessionUpdatePa
 	}
 
 	cfg.ProviderProfileID = profile.ID
+	cfg.LLMModel = strings.TrimSpace(profile.LLMModel)
 
 	s.mu.Lock()
 	s.cfg = cfg
@@ -822,6 +861,25 @@ func (s *session) runResponse(ctx context.Context, llm provider.LLMClient, tts p
 			trace.AddEvent("echo.context", previewDetail(echoPrompt, 160))
 		}
 	}
+	contextMessages, contextStats := s.conversationContextMessages(cfg, messages, text)
+	if len(contextMessages) > 0 {
+		messages = append(messages, contextMessages...)
+		if trace != nil {
+			trace.AddEvent("session_memory.context", fmt.Sprintf("model=%s limit=%d budget=%d included_tokens=%d included_turns=%d reset=%t compressed=%t",
+				contextStats.model,
+				contextStats.contextLimit,
+				contextStats.historyBudget,
+				contextStats.includedTokens,
+				contextStats.includedTurns,
+				contextStats.reset,
+				contextStats.compressed,
+			))
+		}
+	} else if trace != nil {
+		if contextStats.reset {
+			trace.AddEvent("session_memory.reset", contextStats.key)
+		}
+	}
 	messages = append(messages, provider.ChatMessage{Role: "user", Content: text})
 	if err := s.proposeMCPCall(ctx, llm, cfg, text, voiceAssistant, trace); err != nil && trace != nil {
 		trace.AddEvent("mcp.call.proposed_failed", previewDetail(err.Error(), 160))
@@ -1029,6 +1087,9 @@ func (s *session) runResponse(ctx context.Context, llm provider.LLMClient, tts p
 	status := "completed"
 	if ctx.Err() == context.Canceled {
 		status = "cancelled"
+	}
+	if status == "completed" {
+		s.rememberConversationTurn(cfg, text, replyText)
 	}
 	if trace != nil {
 		trace.AddEvent("response.done", status)
@@ -1376,6 +1437,366 @@ func (s *session) recentSpeechSnapshot() []recentSpeechText {
 	return append([]recentSpeechText(nil), items...)
 }
 
+func newConversationMemoryStore() *conversationMemoryStore {
+	return &conversationMemoryStore{
+		sessions: make(map[string]*conversationMemory),
+	}
+}
+
+func (s *session) conversationContextMessages(cfg sessionConfig, baseMessages []provider.ChatMessage, latestUserText string) ([]provider.ChatMessage, conversationContextStats) {
+	opts := conversationOptionsFromConfig(cfg)
+	key := s.conversationMemoryKey(cfg)
+	stats := conversationContextStats{
+		key:           s.conversationDisplayKey(cfg),
+		model:         cfg.LLMModel,
+		contextLimit:  opts.contextLimitTokens,
+		historyBudget: 0,
+	}
+	if key == "" {
+		return nil, stats
+	}
+
+	now := s.now()
+	summary, turns, reset, compressed := voiceConversationMemory.snapshot(key, now, opts)
+	stats.reset = reset
+	stats.compressed = compressed
+
+	baseTokens := estimateMessagesTokens(baseMessages) + estimateMessageTokens(provider.ChatMessage{Role: "user", Content: latestUserText}) + opts.outputReserveTokens
+	historyBudget := (opts.contextLimitTokens*opts.targetPercent)/100 - baseTokens
+	stats.historyBudget = historyBudget
+	if historyBudget <= 0 {
+		return nil, stats
+	}
+
+	var out []provider.ChatMessage
+	includedTokens := 0
+	if strings.TrimSpace(summary) != "" {
+		message := provider.ChatMessage{
+			Role:    "system",
+			Content: "Conversation memory summary from earlier turns. Use it only to resolve pronouns, follow-up instructions, confirmations, and corrections. Do not quote it unless the user asks.\n" + summary,
+		}
+		tokens := estimateMessageTokens(message)
+		if tokens <= historyBudget {
+			out = append(out, message)
+			includedTokens += tokens
+		}
+	}
+
+	var recent []provider.ChatMessage
+	for index := len(turns) - 1; index >= 0; index-- {
+		turn := turns[index]
+		turnMessages := []provider.ChatMessage{
+			{Role: "user", Content: turn.userText},
+			{Role: "assistant", Content: turn.assistantText},
+		}
+		tokens := estimateMessagesTokens(turnMessages)
+		if includedTokens+tokens > historyBudget {
+			continue
+		}
+		recent = append(turnMessages, recent...)
+		includedTokens += tokens
+		stats.includedTurns++
+	}
+
+	out = append(out, recent...)
+	stats.includedTokens = includedTokens
+	return out, stats
+}
+
+func (s *session) rememberConversationTurn(cfg sessionConfig, userText string, assistantText string) {
+	userText = strings.TrimSpace(userText)
+	assistantText = strings.TrimSpace(assistantText)
+	if userText == "" || assistantText == "" || isBlankASRText(userText) {
+		return
+	}
+	key := s.conversationMemoryKey(cfg)
+	if key == "" {
+		return
+	}
+	voiceConversationMemory.append(key, conversationTurn{
+		userText:      userText,
+		assistantText: assistantText,
+		at:            s.now(),
+	}, conversationOptionsFromConfig(cfg))
+}
+
+func (s *session) conversationMemoryKey(cfg sessionConfig) string {
+	sessionID := strings.TrimSpace(cfg.SessionID)
+	if sessionID == "" {
+		return ""
+	}
+	return strings.Join([]string{
+		strings.TrimSpace(s.apiKey),
+		strings.TrimSpace(cfg.ProviderProfileID),
+		strings.TrimSpace(cfg.ClientID),
+		sessionID,
+	}, "\x00")
+}
+
+func (s *session) conversationDisplayKey(cfg sessionConfig) string {
+	parts := []string{strings.TrimSpace(cfg.ClientID), strings.TrimSpace(cfg.SessionID)}
+	clean := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part != "" {
+			clean = append(clean, part)
+		}
+	}
+	return strings.Join(clean, "/")
+}
+
+func (store *conversationMemoryStore) snapshot(key string, now time.Time, opts conversationOptions) (string, []conversationTurn, bool, bool) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	mem := store.sessions[key]
+	if mem == nil {
+		mem = &conversationMemory{contextLimitTokens: opts.contextLimitTokens}
+		store.sessions[key] = mem
+	}
+
+	reset := false
+	if !mem.lastInteraction.IsZero() && now.Sub(mem.lastInteraction) > opts.idleTimeout {
+		mem.summary = ""
+		mem.turns = nil
+		reset = true
+	}
+	mem.contextLimitTokens = opts.contextLimitTokens
+
+	compressed := compressConversationMemoryLocked(mem, opts)
+	return mem.summary, append([]conversationTurn(nil), mem.turns...), reset, compressed
+}
+
+func (store *conversationMemoryStore) append(key string, turn conversationTurn, opts conversationOptions) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	mem := store.sessions[key]
+	if mem == nil {
+		mem = &conversationMemory{contextLimitTokens: opts.contextLimitTokens}
+		store.sessions[key] = mem
+	}
+	if !mem.lastInteraction.IsZero() && turn.at.Sub(mem.lastInteraction) > opts.idleTimeout {
+		mem.summary = ""
+		mem.turns = nil
+	}
+	mem.contextLimitTokens = opts.contextLimitTokens
+	mem.turns = append(mem.turns, turn)
+	mem.lastInteraction = turn.at
+	compressConversationMemoryLocked(mem, opts)
+}
+
+type conversationOptions struct {
+	contextLimitTokens  int
+	targetPercent       int
+	compressPercent     int
+	outputReserveTokens int
+	recentTurnLimit     int
+	idleTimeout         time.Duration
+	summaryRuneLimit    int
+}
+
+func conversationOptionsFromConfig(cfg sessionConfig) conversationOptions {
+	opts := conversationOptions{
+		contextLimitTokens:  inferModelContextLimitTokens(cfg.LLMModel),
+		targetPercent:       conversationTargetPct,
+		compressPercent:     conversationCompressPct,
+		outputReserveTokens: conversationOutputReserveTokens,
+		recentTurnLimit:     conversationRecentTurnLimit,
+		idleTimeout:         conversationIdleTimeout,
+		summaryRuneLimit:    conversationSummaryRuneLimit,
+	}
+
+	for _, source := range []map[string]any{cfg.VoiceAssistant.Metadata, cfg.VoiceAssistant.UIContext} {
+		for _, scoped := range []map[string]any{source, mapValue(source, "context_management"), mapValue(source, "session_context")} {
+			if len(scoped) == 0 {
+				continue
+			}
+			if value, ok := positiveIntValue(scoped["max_context_tokens"]); ok {
+				opts.contextLimitTokens = value
+			}
+			if value, ok := positiveIntValue(scoped["target_context_percent"]); ok {
+				opts.targetPercent = clampInt(value, 20, 95)
+			}
+			if value, ok := positiveIntValue(scoped["compress_context_percent"]); ok {
+				opts.compressPercent = clampInt(value, opts.targetPercent, 98)
+			}
+			if value, ok := positiveIntValue(scoped["output_reserve_tokens"]); ok {
+				opts.outputReserveTokens = value
+			}
+			if value, ok := positiveIntValue(scoped["recent_turns"]); ok {
+				opts.recentTurnLimit = clampInt(value, 1, 32)
+			}
+			if value, ok := positiveIntValue(scoped["idle_timeout_seconds"]); ok {
+				opts.idleTimeout = time.Duration(value) * time.Second
+			}
+			if value, ok := positiveIntValue(scoped["summary_rune_limit"]); ok {
+				opts.summaryRuneLimit = clampInt(value, 400, 12_000)
+			}
+		}
+	}
+
+	if opts.contextLimitTokens < 2048 {
+		opts.contextLimitTokens = 2048
+	}
+	if opts.compressPercent < opts.targetPercent {
+		opts.compressPercent = opts.targetPercent
+	}
+	return opts
+}
+
+func inferModelContextLimitTokens(model string) int {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	switch {
+	case normalized == "":
+		return 32_768
+	case strings.Contains(normalized, "1m") || strings.Contains(normalized, "1000k") || strings.Contains(normalized, "1048k"):
+		return 1_048_576
+	case strings.Contains(normalized, "512k"):
+		return 524_288
+	case strings.Contains(normalized, "256k") || strings.Contains(normalized, "262k") || strings.Contains(normalized, "qwen3.6"):
+		return 262_144
+	case strings.Contains(normalized, "128k") || strings.Contains(normalized, "qwen3") || strings.Contains(normalized, "qwen2.5"):
+		return 131_072
+	case strings.Contains(normalized, "64k"):
+		return 65_536
+	case strings.Contains(normalized, "32k"):
+		return 32_768
+	case strings.Contains(normalized, "16k"):
+		return 16_384
+	case strings.Contains(normalized, "8k"):
+		return 8_192
+	case strings.Contains(normalized, "4k"):
+		return 4_096
+	default:
+		return 32_768
+	}
+}
+
+func compressConversationMemoryLocked(mem *conversationMemory, opts conversationOptions) bool {
+	compressed := false
+	if len(mem.turns) > opts.recentTurnLimit {
+		cut := len(mem.turns) - opts.recentTurnLimit
+		mem.summary = mergeConversationSummary(mem.summary, mem.turns[:cut], opts.summaryRuneLimit)
+		mem.turns = append([]conversationTurn(nil), mem.turns[cut:]...)
+		compressed = true
+	}
+
+	threshold := (opts.contextLimitTokens * opts.compressPercent) / 100
+	for estimateConversationMemoryTokens(mem) > threshold && len(mem.turns) > 1 {
+		mem.summary = mergeConversationSummary(mem.summary, mem.turns[:1], opts.summaryRuneLimit)
+		mem.turns = append([]conversationTurn(nil), mem.turns[1:]...)
+		compressed = true
+	}
+	if estimateTokens(mem.summary) > threshold/2 {
+		mem.summary = truncateRunes(mem.summary, opts.summaryRuneLimit/2)
+		compressed = true
+	}
+	return compressed
+}
+
+func mergeConversationSummary(existing string, turns []conversationTurn, limit int) string {
+	var lines []string
+	if strings.TrimSpace(existing) != "" {
+		lines = append(lines, strings.TrimSpace(existing))
+	}
+	for _, turn := range turns {
+		lines = append(lines, fmt.Sprintf("- %s user: %s assistant: %s",
+			turn.at.UTC().Format(time.RFC3339),
+			truncateRunes(strings.TrimSpace(turn.userText), 220),
+			truncateRunes(strings.TrimSpace(turn.assistantText), 220),
+		))
+	}
+	return truncateRunes(strings.Join(lines, "\n"), limit)
+}
+
+func estimateConversationMemoryTokens(mem *conversationMemory) int {
+	total := estimateTokens(mem.summary)
+	for _, turn := range mem.turns {
+		total += estimateMessagesTokens([]provider.ChatMessage{
+			{Role: "user", Content: turn.userText},
+			{Role: "assistant", Content: turn.assistantText},
+		})
+	}
+	return total
+}
+
+func estimateMessagesTokens(messages []provider.ChatMessage) int {
+	total := 0
+	for _, message := range messages {
+		total += estimateMessageTokens(message)
+	}
+	return total
+}
+
+func estimateMessageTokens(message provider.ChatMessage) int {
+	return 4 + estimateTokens(message.Role) + estimateTokens(message.Content)
+}
+
+func estimateTokens(text string) int {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return 0
+	}
+	asciiRunes := 0
+	tokens := 0
+	for _, r := range text {
+		switch {
+		case unicode.In(r, unicode.Han, unicode.Hiragana, unicode.Katakana, unicode.Hangul):
+			tokens++
+		case r > 127:
+			tokens++
+		default:
+			asciiRunes++
+		}
+	}
+	tokens += (asciiRunes + 3) / 4
+	if tokens <= 0 {
+		return 1
+	}
+	return tokens
+}
+
+func mapValue(source map[string]any, key string) map[string]any {
+	if source == nil {
+		return nil
+	}
+	value, ok := source[key]
+	if !ok {
+		return nil
+	}
+	typed, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	return typed
+}
+
+func positiveIntValue(value any) (int, bool) {
+	switch typed := value.(type) {
+	case int:
+		return typed, typed > 0
+	case int64:
+		return int(typed), typed > 0
+	case float64:
+		return int(typed), typed > 0
+	case json.Number:
+		parsed, err := typed.Int64()
+		return int(parsed), err == nil && parsed > 0
+	default:
+		return 0, false
+	}
+}
+
+func clampInt(value int, min int, max int) int {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
 func normalizeEchoText(text string) string {
 	var out strings.Builder
 	for _, r := range text {
@@ -1590,6 +2011,17 @@ func previewDetail(text string, limit int) string {
 		return text
 	}
 	return text[:limit] + "..."
+}
+
+func truncateRunes(text string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	return string(runes[:limit])
 }
 
 func voiceAssistantPrompt(metadata service.VoiceAssistantMetadata) string {

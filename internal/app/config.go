@@ -28,6 +28,7 @@ type Config struct {
 	DefaultProviderAPIKey  string
 	DefaultASRModel        string
 	DefaultLLMModel        string
+	DefaultMultimodalModel string
 	DefaultTTSModel        string
 	RetryHintSec           int
 }
@@ -58,6 +59,7 @@ func LoadConfig() (Config, error) {
 		DefaultProviderAPIKey:  envOrDefault("AGENSENSE_DEFAULT_PROVIDER_API_KEY", ""),
 		DefaultASRModel:        envOrDefault("AGENSENSE_DEFAULT_ASR_MODEL", "whisper-1"),
 		DefaultLLMModel:        envOrDefault("AGENSENSE_DEFAULT_LLM_MODEL", "hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m"),
+		DefaultMultimodalModel: envOrDefault("AGENSENSE_DEFAULT_MULTIMODAL_MODEL", envOrDefault("AGENSENSE_DEFAULT_LLM_MODEL", "hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m")),
 		DefaultTTSModel:        envOrDefault("AGENSENSE_DEFAULT_TTS_MODEL", "faster-qwen3-tts"),
 		RetryHintSec:           envOrDefaultInt("AGENSENSE_RETRY_HINT_SEC", 30),
 	}

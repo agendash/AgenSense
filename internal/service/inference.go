@@ -125,6 +125,216 @@ func (s *RuntimeInferenceService) ChatStream(ctx context.Context, apiKey string,
 	}, nil
 }
 
+func (s *RuntimeInferenceService) CompleteMultimodal(ctx context.Context, apiKey string, req MultimodalInferenceRequest) (MultimodalInferenceResponse, error) {
+	resp, _, err := s.completeMultimodal(ctx, apiKey, req, "/v1/multimodal/chat")
+	return resp, err
+}
+
+func (s *RuntimeInferenceService) AnalyzeVision(ctx context.Context, apiKey string, req VisionInferenceRequest) (VisionInferenceResponse, error) {
+	if len(req.Images) == 0 {
+		return VisionInferenceResponse{}, ErrInvalidInput
+	}
+	prompt := strings.TrimSpace(req.Prompt)
+	if prompt == "" {
+		prompt = "Describe the image."
+	}
+
+	content := []MultimodalContentInput{{
+		Type: "text",
+		Text: prompt,
+	}}
+	for _, image := range req.Images {
+		content = append(content, MultimodalContentInput{
+			Type:        "image_url",
+			ImageBase64: image.ImageBase64,
+			URL:         firstNonEmpty(strings.TrimSpace(image.ImageURL), strings.TrimSpace(image.URL)),
+			MIMEType:    image.MIMEType,
+			Name:        image.Name,
+		})
+	}
+	multimodalResp, imageCount, err := s.completeMultimodal(ctx, apiKey, MultimodalInferenceRequest{
+		ProviderProfileID: req.ProviderProfileID,
+		ClientID:          req.ClientID,
+		DeviceLabel:       req.DeviceLabel,
+		HardwareSKU:       req.HardwareSKU,
+		FirmwareVersion:   req.FirmwareVersion,
+		FirmwareChannel:   req.FirmwareChannel,
+		SessionID:         req.SessionID,
+		Messages: []MultimodalMessageInput{{
+			Role:    "user",
+			Content: content,
+		}},
+		VoiceAssistant:  req.VoiceAssistant,
+		UIContext:       req.UIContext,
+		AssistantIntent: req.AssistantIntent,
+		Metadata:        req.Metadata,
+	}, "/v1/vision/analyze")
+	if err != nil {
+		return VisionInferenceResponse{}, err
+	}
+	return VisionInferenceResponse{
+		ProviderProfileID: multimodalResp.ProviderProfileID,
+		Text:              multimodalResp.Text,
+		ImageCount:        imageCount,
+		AssistantIntent:   multimodalResp.AssistantIntent,
+	}, nil
+}
+
+func (s *RuntimeInferenceService) completeMultimodal(ctx context.Context, apiKey string, req MultimodalInferenceRequest, path string) (MultimodalInferenceResponse, int, error) {
+	if s.registry == nil || s.factory == nil {
+		return MultimodalInferenceResponse{}, 0, ErrInvalidInput
+	}
+	messages, imageCount, err := providerMultimodalMessages(req.Messages)
+	if err != nil {
+		return MultimodalInferenceResponse{}, 0, err
+	}
+	voiceAssistant := MergeVoiceAssistantMetadata(req.VoiceAssistant, req.UIContext, req.AssistantIntent, req.Metadata)
+	handle := s.startTrace(debugtrace.KindMultimodal, req.ProviderProfileID, strings.TrimSpace(req.ClientID), strings.TrimSpace(req.DeviceLabel), strings.TrimSpace(req.HardwareSKU), strings.TrimSpace(req.FirmwareVersion), strings.TrimSpace(req.FirmwareChannel), strings.TrimSpace(req.SessionID), path)
+	if !voiceAssistant.Empty() {
+		handle.AddEvent("voice_assistant.context", compactJSON(voiceAssistant))
+	}
+	handle.AddEvent("multimodal.started", compactJSON(map[string]any{
+		"message_count": len(messages),
+		"image_count":   imageCount,
+	}))
+	profile, err := s.registry.ResolveProviderProfile(ctx, apiKey, req.ProviderProfileID)
+	if err != nil {
+		handle.Fail(err)
+		return MultimodalInferenceResponse{}, 0, err
+	}
+	handle.SetProviderProfileID(profile.ID)
+	client, err := s.factory.MultimodalClient(profile)
+	if err != nil {
+		handle.Fail(err)
+		return MultimodalInferenceResponse{}, 0, err
+	}
+	providerResp, err := client.Complete(ctx, provider.MultimodalRequest{
+		DeviceID:  firstNonEmpty(strings.TrimSpace(req.ClientID), NamespaceFromAPIKey(apiKey)),
+		SessionID: strings.TrimSpace(req.SessionID),
+		Messages:  messages,
+	})
+	if err != nil {
+		handle.Fail(err)
+		return MultimodalInferenceResponse{}, 0, err
+	}
+	replyText := strings.TrimSpace(providerResp.Text)
+	handle.AddEvent("multimodal.completed", replyText)
+	handle.Complete()
+	return MultimodalInferenceResponse{
+		ProviderProfileID: profile.ID,
+		Text:              replyText,
+		AssistantIntent:   voiceAssistant.AssistantIntent,
+	}, imageCount, nil
+}
+
+func providerMultimodalMessages(inputs []MultimodalMessageInput) ([]provider.MultimodalMessage, int, error) {
+	if len(inputs) == 0 {
+		return nil, 0, ErrInvalidInput
+	}
+	out := make([]provider.MultimodalMessage, 0, len(inputs))
+	imageCount := 0
+	for _, input := range inputs {
+		role := strings.TrimSpace(input.Role)
+		if role == "" {
+			role = "user"
+		}
+		parts := make([]provider.MultimodalContent, 0, len(input.Content))
+		for _, content := range input.Content {
+			part, isImage, ok, err := providerMultimodalContent(content)
+			if err != nil {
+				return nil, 0, err
+			}
+			if !ok {
+				continue
+			}
+			parts = append(parts, part)
+			if isImage {
+				imageCount++
+			}
+		}
+		if len(parts) == 0 {
+			continue
+		}
+		out = append(out, provider.MultimodalMessage{
+			Role:    role,
+			Content: parts,
+		})
+	}
+	if len(out) == 0 {
+		return nil, 0, ErrInvalidInput
+	}
+	return out, imageCount, nil
+}
+
+func providerMultimodalContent(input MultimodalContentInput) (provider.MultimodalContent, bool, bool, error) {
+	contentType := strings.ToLower(strings.TrimSpace(input.Type))
+	text := strings.TrimSpace(input.Text)
+	if text != "" && (contentType == "" || contentType == "text" || contentType == "input_text") {
+		return provider.MultimodalContent{
+			Type: "text",
+			Text: text,
+			Name: strings.TrimSpace(input.Name),
+		}, false, true, nil
+	}
+
+	url := strings.TrimSpace(input.URL)
+	if input.ImageURL != nil && strings.TrimSpace(input.ImageURL.URL) != "" {
+		url = strings.TrimSpace(input.ImageURL.URL)
+	}
+	mimeType := strings.TrimSpace(input.MIMEType)
+	base64Input := strings.TrimSpace(input.ImageBase64)
+	if base64Input != "" && (contentType == "" || contentType == "image" || contentType == "image_url" || contentType == "input_image") {
+		data, detectedMIME, err := decodeImageBase64(base64Input)
+		if err != nil {
+			return provider.MultimodalContent{}, false, false, err
+		}
+		if mimeType == "" {
+			mimeType = detectedMIME
+		}
+		if mimeType == "" {
+			mimeType = "image/png"
+		}
+		return provider.MultimodalContent{
+			Type:     "image",
+			Data:     data,
+			MIMEType: mimeType,
+			Name:     strings.TrimSpace(input.Name),
+		}, true, true, nil
+	}
+	if url != "" && (contentType == "" || contentType == "image" || contentType == "image_url" || contentType == "input_image") {
+		return provider.MultimodalContent{
+			Type:     "image_url",
+			ImageURL: url,
+			MIMEType: mimeType,
+			Name:     strings.TrimSpace(input.Name),
+		}, true, true, nil
+	}
+	return provider.MultimodalContent{}, false, false, nil
+}
+
+func decodeImageBase64(input string) ([]byte, string, error) {
+	if strings.HasPrefix(input, "data:") {
+		header, payload, ok := strings.Cut(input, ",")
+		if !ok {
+			return nil, "", ErrInvalidInput
+		}
+		if !strings.Contains(strings.ToLower(header), ";base64") {
+			return nil, "", ErrInvalidInput
+		}
+		mimeType := strings.TrimPrefix(strings.Split(header, ";")[0], "data:")
+		data, err := base64.StdEncoding.DecodeString(strings.TrimSpace(payload))
+		if err != nil {
+			return nil, "", ErrInvalidInput
+		}
+		return data, mimeType, nil
+	}
+	data, err := base64.StdEncoding.DecodeString(input)
+	if err != nil {
+		return nil, "", ErrInvalidInput
+	}
+	return data, "", nil
+}
+
 func compactJSON(value any) string {
 	data, err := json.Marshal(value)
 	if err != nil {

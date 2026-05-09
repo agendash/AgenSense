@@ -62,6 +62,9 @@ func TestEnsureDefaultProviderProfilePromotesMockDefault(t *testing.T) {
 	if profile.ASRBaseURL != cfg.DefaultProviderBaseURL {
 		t.Fatalf("ASRBaseURL = %q, want %q", profile.ASRBaseURL, cfg.DefaultProviderBaseURL)
 	}
+	if profile.MultimodalModel != cfg.DefaultMultimodalModel {
+		t.Fatalf("MultimodalModel = %q, want %q", profile.MultimodalModel, cfg.DefaultMultimodalModel)
+	}
 
 	latest, err := repo.GetLatestConfigSnapshot(ctx, namespace)
 	if err != nil {
@@ -132,6 +135,7 @@ func LoadTestConfig() Config {
 		DefaultProviderAPIKey:  "",
 		DefaultASRModel:        "whisper-1",
 		DefaultLLMModel:        "gemma-4-e2b-it",
+		DefaultMultimodalModel: "gemma-4-e2b-it",
 		DefaultTTSModel:        "tts-1",
 	}
 }

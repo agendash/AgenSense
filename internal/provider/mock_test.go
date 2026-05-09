@@ -38,6 +38,26 @@ func TestMockLLMChatStream(t *testing.T) {
 	}
 }
 
+func TestMockMultimodalComplete(t *testing.T) {
+	t.Parallel()
+
+	got, err := MockMultimodal{}.Complete(context.Background(), MultimodalRequest{
+		Messages: []MultimodalMessage{{
+			Role: "user",
+			Content: []MultimodalContent{
+				{Type: "text", Text: "what is this"},
+				{Type: "image", Data: []byte{1, 2, 3}, MIMEType: "image/png"},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	if got.Text == "" {
+		t.Fatal("Complete() returned empty text")
+	}
+}
+
 func TestMockTTSSynthesizeStream(t *testing.T) {
 	t.Parallel()
 

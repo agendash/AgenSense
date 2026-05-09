@@ -99,3 +99,90 @@ func TestRecentSpeechPromptFramesEchoAndRawASR(t *testing.T) {
 		}
 	}
 }
+
+func TestConversationOptionsUseModelLimitAndMetadataOverrides(t *testing.T) {
+	base := conversationOptionsFromConfig(sessionConfig{
+		LLMModel: "huihui-qwen3.6-35b-a3b-instruct-abliterated",
+	})
+	if base.contextLimitTokens != 262144 {
+		t.Fatalf("contextLimitTokens = %d, want 262144", base.contextLimitTokens)
+	}
+
+	got := conversationOptionsFromConfig(sessionConfig{
+		LLMModel: "small-4k-model",
+		VoiceAssistant: service.VoiceAssistantMetadata{
+			Metadata: map[string]any{
+				"context_management": map[string]any{
+					"max_context_tokens":       4096,
+					"target_context_percent":   65,
+					"compress_context_percent": 75,
+					"output_reserve_tokens":    512,
+					"recent_turns":             4,
+					"idle_timeout_seconds":     42,
+					"summary_rune_limit":       1200,
+				},
+			},
+		},
+	})
+	if got.contextLimitTokens != 4096 || got.targetPercent != 65 || got.compressPercent != 75 {
+		t.Fatalf("context options = %+v, want explicit token/percent overrides", got)
+	}
+	if got.outputReserveTokens != 512 || got.recentTurnLimit != 4 || got.idleTimeout != 42*time.Second || got.summaryRuneLimit != 1200 {
+		t.Fatalf("context options = %+v, want explicit reserve/recent/idle/summary overrides", got)
+	}
+}
+
+func TestConversationMemoryStoreResetsAfterIdle(t *testing.T) {
+	store := newConversationMemoryStore()
+	opts := conversationOptions{
+		contextLimitTokens:  4096,
+		targetPercent:       70,
+		compressPercent:     80,
+		outputReserveTokens: 256,
+		recentTurnLimit:     6,
+		idleTimeout:         time.Minute,
+		summaryRuneLimit:    1200,
+	}
+	start := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
+
+	store.append("session-a", conversationTurn{userText: "提醒我接孩子", assistantText: "需要几点？", at: start}, opts)
+	_, turns, reset, _ := store.snapshot("session-a", start.Add(30*time.Second), opts)
+	if reset || len(turns) != 1 {
+		t.Fatalf("snapshot before idle reset = reset %v turns %d, want false/1", reset, len(turns))
+	}
+
+	summary, turns, reset, _ := store.snapshot("session-a", start.Add(2*time.Minute), opts)
+	if !reset || summary != "" || len(turns) != 0 {
+		t.Fatalf("snapshot after idle reset = reset %v summary %q turns %d, want true empty 0", reset, summary, len(turns))
+	}
+}
+
+func TestConversationMemoryStoreCompressesOldTurns(t *testing.T) {
+	store := newConversationMemoryStore()
+	opts := conversationOptions{
+		contextLimitTokens:  4096,
+		targetPercent:       70,
+		compressPercent:     80,
+		outputReserveTokens: 256,
+		recentTurnLimit:     2,
+		idleTimeout:         10 * time.Minute,
+		summaryRuneLimit:    1200,
+	}
+	start := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
+
+	for i, text := range []string{"第一轮", "第二轮", "第三轮", "第四轮"} {
+		store.append("session-a", conversationTurn{
+			userText:      text,
+			assistantText: "收到 " + text,
+			at:            start.Add(time.Duration(i) * time.Second),
+		}, opts)
+	}
+
+	summary, turns, _, _ := store.snapshot("session-a", start.Add(5*time.Second), opts)
+	if !strings.Contains(summary, "第一轮") || !strings.Contains(summary, "第二轮") {
+		t.Fatalf("summary = %q, want compressed old turns", summary)
+	}
+	if len(turns) != 2 || turns[0].userText != "第三轮" || turns[1].userText != "第四轮" {
+		t.Fatalf("turns = %#v, want last two turns", turns)
+	}
+}

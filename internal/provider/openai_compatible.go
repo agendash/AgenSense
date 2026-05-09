@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -254,6 +255,96 @@ func (c *OpenAICompatibleLLM) ChatStream(ctx context.Context, req ChatRequest, c
 	}
 	logCompletion()
 	return nil
+}
+
+type OpenAICompatibleMultimodal struct {
+	httpClient *http.Client
+	baseURL    string
+	apiKey     string
+	model      string
+}
+
+func NewOpenAICompatibleMultimodal(httpClient *http.Client, baseURL, apiKey, model string) *OpenAICompatibleMultimodal {
+	return &OpenAICompatibleMultimodal{
+		httpClient: ensureHTTPClient(httpClient),
+		baseURL:    strings.TrimRight(baseURL, "/"),
+		apiKey:     strings.TrimSpace(apiKey),
+		model:      defaultString(strings.TrimSpace(model), "gpt-4.1-mini"),
+	}
+}
+
+func (c *OpenAICompatibleMultimodal) Complete(ctx context.Context, req MultimodalRequest) (MultimodalResponse, error) {
+	start := time.Now()
+	messages, imageCount, err := normalizeMultimodalMessagesForOpenAI(req.Messages)
+	if err != nil {
+		return MultimodalResponse{}, err
+	}
+	body := map[string]any{
+		"model":    c.model,
+		"messages": messages,
+		"stream":   false,
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return MultimodalResponse{}, err
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, joinOpenAIPath(c.baseURL, "/chat/completions"), bytes.NewReader(raw))
+	if err != nil {
+		return MultimodalResponse{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	setBearerIfPresent(httpReq, c.apiKey)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return MultimodalResponse{}, err
+	}
+	defer resp.Body.Close()
+	headersAt := time.Now()
+	if resp.StatusCode/100 != 2 {
+		return MultimodalResponse{}, decodeHTTPError(resp)
+	}
+
+	var out struct {
+		Error *struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+			Code    any    `json:"code"`
+		} `json:"error"`
+		Choices []struct {
+			Message struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return MultimodalResponse{}, err
+	}
+	if out.Error != nil {
+		message := strings.TrimSpace(out.Error.Message)
+		if message == "" {
+			message = "provider multimodal error"
+		}
+		return MultimodalResponse{}, fmt.Errorf("provider: multimodal error: %s", message)
+	}
+	if len(out.Choices) == 0 {
+		return MultimodalResponse{}, fmt.Errorf("provider: empty multimodal response")
+	}
+	text := strings.TrimSpace(openAIMessageContentText(out.Choices[0].Message.Content))
+	if text == "" {
+		return MultimodalResponse{}, fmt.Errorf("provider: empty multimodal response")
+	}
+	slog.InfoContext(ctx, "provider multimodal completed",
+		"provider", "openai-compatible",
+		"model", c.model,
+		"headers_ms", headersAt.Sub(start).Milliseconds(),
+		"total_ms", time.Since(start).Milliseconds(),
+		"message_count", len(messages),
+		"image_count", imageCount,
+		"text_chars", len(text),
+	)
+	return MultimodalResponse{Text: text}, nil
 }
 
 type OpenAICompatibleTTS struct {
@@ -701,6 +792,100 @@ func normalizeChatMessagesForOpenAI(messages []ChatMessage) []ChatMessage {
 	}
 	out = append(out, nonSystem...)
 	return out
+}
+
+func normalizeMultimodalMessagesForOpenAI(messages []MultimodalMessage) ([]map[string]any, int, error) {
+	if len(messages) == 0 {
+		return nil, 0, fmt.Errorf("provider: empty multimodal messages")
+	}
+
+	out := make([]map[string]any, 0, len(messages))
+	imageCount := 0
+	for _, message := range messages {
+		role := strings.TrimSpace(message.Role)
+		if role == "" {
+			role = "user"
+		}
+		parts := make([]map[string]any, 0, len(message.Content))
+		for _, content := range message.Content {
+			part, isImage, ok := openAIContentPart(content)
+			if !ok {
+				continue
+			}
+			parts = append(parts, part)
+			if isImage {
+				imageCount++
+			}
+		}
+		if len(parts) == 0 {
+			continue
+		}
+		out = append(out, map[string]any{
+			"role":    role,
+			"content": parts,
+		})
+	}
+	if len(out) == 0 {
+		return nil, 0, fmt.Errorf("provider: empty multimodal content")
+	}
+	return out, imageCount, nil
+}
+
+func openAIContentPart(content MultimodalContent) (map[string]any, bool, bool) {
+	contentType := strings.ToLower(strings.TrimSpace(content.Type))
+	text := strings.TrimSpace(content.Text)
+	if text != "" && (contentType == "" || contentType == "text" || contentType == "input_text") {
+		return map[string]any{
+			"type": "text",
+			"text": text,
+		}, false, true
+	}
+
+	imageURL := strings.TrimSpace(content.ImageURL)
+	if imageURL == "" && len(content.Data) > 0 {
+		mimeType := strings.TrimSpace(content.MIMEType)
+		if mimeType == "" {
+			mimeType = "application/octet-stream"
+		}
+		imageURL = "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(content.Data)
+	}
+	if imageURL != "" && (contentType == "" || contentType == "image" || contentType == "image_url" || contentType == "input_image") {
+		return map[string]any{
+			"type": "image_url",
+			"image_url": map[string]any{
+				"url": imageURL,
+			},
+		}, true, true
+	}
+	return nil, false, false
+}
+
+func openAIMessageContentText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text
+	}
+	var parts []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		return ""
+	}
+	var builder strings.Builder
+	for _, part := range parts {
+		if strings.TrimSpace(part.Text) == "" {
+			continue
+		}
+		if builder.Len() > 0 {
+			builder.WriteString("\n")
+		}
+		builder.WriteString(strings.TrimSpace(part.Text))
+	}
+	return builder.String()
 }
 
 func decodeHTTPError(resp *http.Response) error {

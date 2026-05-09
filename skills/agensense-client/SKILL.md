@@ -1,6 +1,6 @@
 ---
 name: agensense-client
-description: Build third-party clients and integrations on top of AgenSense. Use when implementing desktop, mobile, web, backend, hardware, automation, or agent code that calls AgenSense provider profiles, direct ASR/LLM/TTS APIs, voice WebSocket sessions, or debug trace APIs. This skill is for using AgenSense as a service, not for modifying the AgenSense server codebase.
+description: Build third-party clients and integrations on top of AgenSense. Use when implementing desktop, mobile, web, backend, hardware, automation, or agent code that calls AgenSense provider profiles, direct ASR/LLM/multimodal/TTS APIs, voice WebSocket sessions, or debug trace APIs. This skill is for using AgenSense as a service, not for modifying the AgenSense server codebase.
 ---
 
 # AgenSense Client Integration
@@ -13,7 +13,7 @@ Do not use this skill as a maintainer guide for editing AgenSense internals. Tre
 
 Prefer the shared service mode unless the client is a hardware/device protocol peer.
 
-- Shared service mode: use `Authorization: Bearer <AGENSENSE_API_KEY>`, provider profiles, and direct ASR/LLM/TTS APIs.
+- Shared service mode: use `Authorization: Bearer <AGENSENSE_API_KEY>`, provider profiles, and direct ASR/LLM/multimodal/TTS APIs.
 - Realtime voice mode: use `/v1/voice/ws` for AgenDash-style microphone streaming and streamed LLM/TTS response events.
 - Device compatibility mode: use `/v1/bootstrap` and `/v1/session/ws` only when implementing ESP32/M5Stack/HID-style device clients.
 - Debug mode: use `/debug/traces` and `/debug/api/traces` only when the server was started with `AGENSENSE_DEBUG=true`.
@@ -32,7 +32,7 @@ Never hardcode real provider API keys or user secrets into source code. Load the
 
 ## Provider Profiles
 
-Use provider profiles so clients do not embed provider-specific ASR/LLM/TTS logic.
+Use provider profiles so clients do not embed provider-specific ASR/LLM/multimodal/TTS logic.
 
 List profiles:
 
@@ -54,13 +54,15 @@ curl -sS -X POST "$AGENSENSE_BASE_URL/v1/providers" \
     "asr_model": "whisper-1",
     "llm_base_url": "http://127.0.0.1:8081/v1",
     "llm_model": "gemma-4-e2b-it",
+    "multimodal_base_url": "http://127.0.0.1:8081/v1",
+    "multimodal_model": "gemma-4-e2b-it",
     "tts_base_url": "http://127.0.0.1:8081/v1",
     "tts_model": "tts-1",
     "default": true
   }'
 ```
 
-Use `mock://asr`, `mock://llm`, and `mock://tts` for deterministic local tests.
+Use `mock://asr`, `mock://llm`, `mock://multimodal`, and `mock://tts` for deterministic local tests.
 
 ## Direct APIs
 
@@ -70,6 +72,8 @@ Primary endpoints:
 
 - `POST /v1/asr/transcribe`
 - `POST /v1/llm/chat`
+- `POST /v1/multimodal/chat`
+- `POST /v1/vision/analyze`
 - `POST /v1/tts/synthesize`
 
 Common request fields:
@@ -92,6 +96,23 @@ curl -sS -X POST "$AGENSENSE_BASE_URL/v1/llm/chat" \
     "messages": [
       {"role": "system", "content": "You are concise."},
       {"role": "user", "content": "Summarize this workspace state."}
+    ]
+  }'
+```
+
+Vision example:
+
+```sh
+curl -sS -X POST "$AGENSENSE_BASE_URL/v1/vision/analyze" \
+  -H "Authorization: Bearer $AGENSENSE_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{
+    "provider_profile_id": "default",
+    "client_id": "my-client",
+    "session_id": "vision-001",
+    "prompt": "Describe this image.",
+    "images": [
+      {"image_base64": "iVBORw0KGgo...", "mime_type": "image/png"}
     ]
   }'
 ```

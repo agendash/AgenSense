@@ -49,6 +49,8 @@ func NewRouter(control service.ControlPlane, registry service.ProviderRegistry, 
 	mux.HandleFunc("/v1/asr/transcribe", r.handleASRTranscribe)
 	mux.HandleFunc("/v1/llm/chat", r.handleLLMChat)
 	mux.HandleFunc("/v1/llm/chat/stream", r.handleLLMChatStream)
+	mux.HandleFunc("/v1/multimodal/chat", r.handleMultimodalChat)
+	mux.HandleFunc("/v1/vision/analyze", r.handleVisionAnalyze)
 	mux.HandleFunc("/v1/tts/synthesize", r.handleTTSSynthesize)
 	if sessionWS != nil {
 		mux.Handle("/v1/session/ws", sessionWS)
@@ -411,6 +413,60 @@ func (r *Router) handleLLMChatStream(w http.ResponseWriter, req *http.Request) {
 	}
 	_ = writeSSE(w, "done", resp)
 	flusher.Flush()
+}
+
+func (r *Router) handleMultimodalChat(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed")
+		return
+	}
+	if r.inference == nil {
+		writeError(w, http.StatusServiceUnavailable, "inference_unavailable")
+		return
+	}
+	apiKey := bearerToken(req.Header.Get("Authorization"))
+	if apiKey == "" {
+		writeError(w, http.StatusUnauthorized, "missing_api_key")
+		return
+	}
+	var input service.MultimodalInferenceRequest
+	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json")
+		return
+	}
+	resp, err := r.inference.CompleteMultimodal(req.Context(), apiKey, input)
+	if err != nil {
+		writeError(w, mapErrorStatus(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (r *Router) handleVisionAnalyze(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed")
+		return
+	}
+	if r.inference == nil {
+		writeError(w, http.StatusServiceUnavailable, "inference_unavailable")
+		return
+	}
+	apiKey := bearerToken(req.Header.Get("Authorization"))
+	if apiKey == "" {
+		writeError(w, http.StatusUnauthorized, "missing_api_key")
+		return
+	}
+	var input service.VisionInferenceRequest
+	if err := json.NewDecoder(req.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_json")
+		return
+	}
+	resp, err := r.inference.AnalyzeVision(req.Context(), apiKey, input)
+	if err != nil {
+		writeError(w, mapErrorStatus(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (r *Router) handleTTSSynthesize(w http.ResponseWriter, req *http.Request) {

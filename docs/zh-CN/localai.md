@@ -53,6 +53,7 @@ http://127.0.0.1:8081
 
 - ASR：`whisper-1`
 - LLM：`hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m`
+- Multimodal：默认继承 LLM 模型，除非显式设置 `AGENSENSE_DEFAULT_MULTIMODAL_MODEL`
 - TTS：`faster-qwen3-tts`
 
 如果你的 LocalAI 模型 ID 不同，用环境变量覆盖：
@@ -60,6 +61,7 @@ http://127.0.0.1:8081
 ```sh
 export AGENSENSE_DEFAULT_ASR_MODEL="your-asr-model"
 export AGENSENSE_DEFAULT_LLM_MODEL="your-llm-model"
+export AGENSENSE_DEFAULT_MULTIMODAL_MODEL="your-vision-capable-model"
 export AGENSENSE_DEFAULT_TTS_MODEL="your-tts-model"
 ```
 

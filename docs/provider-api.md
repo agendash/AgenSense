@@ -1,6 +1,6 @@
 # Provider API
 
-The provider API is the primary shared-service interface for AgenSense. It lets clients register reusable upstream model profiles and then call ASR, LLM, and TTS without embedding provider-specific code in every client.
+The provider API is the primary shared-service interface for AgenSense. It lets clients register reusable upstream model profiles and then call ASR, LLM, multimodal vision, and TTS without embedding provider-specific code in every client.
 
 ## Authentication
 
@@ -17,6 +17,7 @@ By default, AgenSense seeds the `demo-user-key` namespace with a LocalAI-oriente
 - base URL: `http://127.0.0.1:8081/v1`
 - ASR model: `whisper-1`
 - LLM model: `hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m`
+- Multimodal model: inherits the LLM model by default
 - TTS model: `faster-qwen3-tts`
 
 See [LocalAI setup](localai.md) for the recommended local address layout.
@@ -31,6 +32,9 @@ Supported fields:
 - `llm_base_url`
 - `llm_api_key`
 - `llm_model`
+- `multimodal_base_url`
+- `multimodal_api_key`
+- `multimodal_model`
 - `tts_base_url`
 - `tts_api_key`
 - `tts_model`
@@ -53,6 +57,9 @@ Provider credentials are currently persisted as plain text in the local JSON sto
   "llm_base_url": "http://127.0.0.1:8081/v1",
   "llm_api_key": "******",
   "llm_model": "hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m",
+  "multimodal_base_url": "http://127.0.0.1:8081/v1",
+  "multimodal_api_key": "******",
+  "multimodal_model": "hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m",
   "tts_base_url": "http://127.0.0.1:8081/v1",
   "tts_api_key": "******",
   "tts_model": "faster-qwen3-tts",
@@ -157,6 +164,58 @@ data: {"provider_profile_id":"default","text":"full text","deltas":["partial tex
 
 Streaming text and tool-use metadata can be used together. AgenSense currently streams model text while preserving Universal Voice Layer / MCP metadata in traces; a full tool execution loop should be implemented by the client or a future tool runtime.
 
+## Direct Multimodal / Vision
+
+`POST /v1/multimodal/chat`
+
+```json
+{
+  "provider_profile_id": "default",
+  "client_id": "agendash-desktop",
+  "session_id": "vision-001",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "What is this?"},
+        {
+          "type": "image_url",
+          "image_url": {
+            "url": "data:image/png;base64,iVBORw0KGgo..."
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+Response:
+
+```json
+{
+  "provider_profile_id": "default",
+  "text": "..."
+}
+```
+
+`POST /v1/vision/analyze` is a convenience wrapper for common image analysis calls:
+
+```json
+{
+  "provider_profile_id": "default",
+  "prompt": "Describe this UI screenshot and list visual problems.",
+  "images": [
+    {
+      "image_base64": "iVBORw0KGgo...",
+      "mime_type": "image/png"
+    }
+  ]
+}
+```
+
+If `multimodal_*` fields are omitted from a provider profile, AgenSense falls back to the profile's LLM base URL, API key, and model. The default seeded multimodal model also inherits `AGENSENSE_DEFAULT_LLM_MODEL` unless `AGENSENSE_DEFAULT_MULTIMODAL_MODEL` is set.
+
 ## Direct TTS
 
 `POST /v1/tts/synthesize`
@@ -204,3 +263,12 @@ For each direct inference request, AgenSense resolves the provider in this order
 3. the only available profile in the namespace
 
 If no profile can be selected, the request fails.
+
+## Provider Capabilities
+
+For OpenAI-compatible HTTP providers:
+
+- ASR calls `/audio/transcriptions`
+- LLM calls `/chat/completions` with streaming enabled
+- Multimodal calls `/chat/completions` with OpenAI-style `text` and `image_url` content parts
+- TTS calls `/audio/speech`

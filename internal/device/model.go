@@ -37,23 +37,26 @@ type Device struct {
 }
 
 type ProviderProfile struct {
-	ID         string    `json:"id"`
-	TenantID   string    `json:"tenant_id"`
-	Name       string    `json:"name,omitempty"`
-	ASRBaseURL string    `json:"asr_base_url,omitempty"`
-	ASRAPIKey  string    `json:"asr_api_key,omitempty"`
-	ASRModel   string    `json:"asr_model,omitempty"`
-	LLMBaseURL string    `json:"llm_base_url,omitempty"`
-	LLMAPIKey  string    `json:"llm_api_key,omitempty"`
-	LLMModel   string    `json:"llm_model,omitempty"`
-	TTSBaseURL string    `json:"tts_base_url,omitempty"`
-	TTSAPIKey  string    `json:"tts_api_key,omitempty"`
-	TTSModel   string    `json:"tts_model,omitempty"`
-	VADBaseURL string    `json:"vad_base_url,omitempty"`
-	VADAPIKey  string    `json:"vad_api_key,omitempty"`
-	VADModel   string    `json:"vad_model,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID                string    `json:"id"`
+	TenantID          string    `json:"tenant_id"`
+	Name              string    `json:"name,omitempty"`
+	ASRBaseURL        string    `json:"asr_base_url,omitempty"`
+	ASRAPIKey         string    `json:"asr_api_key,omitempty"`
+	ASRModel          string    `json:"asr_model,omitempty"`
+	LLMBaseURL        string    `json:"llm_base_url,omitempty"`
+	LLMAPIKey         string    `json:"llm_api_key,omitempty"`
+	LLMModel          string    `json:"llm_model,omitempty"`
+	MultimodalBaseURL string    `json:"multimodal_base_url,omitempty"`
+	MultimodalAPIKey  string    `json:"multimodal_api_key,omitempty"`
+	MultimodalModel   string    `json:"multimodal_model,omitempty"`
+	TTSBaseURL        string    `json:"tts_base_url,omitempty"`
+	TTSAPIKey         string    `json:"tts_api_key,omitempty"`
+	TTSModel          string    `json:"tts_model,omitempty"`
+	VADBaseURL        string    `json:"vad_base_url,omitempty"`
+	VADAPIKey         string    `json:"vad_api_key,omitempty"`
+	VADModel          string    `json:"vad_model,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 type ConfigSnapshot struct {

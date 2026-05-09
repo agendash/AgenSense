@@ -2,13 +2,13 @@
 
 面向 `AgenDash`、`AgenLeash` 以及其他非 agen 客户端的可复用 AI 感知服务。
 
-它的目标不是把 LLM / ASR / TTS / VAD 跑在设备上，而是提供一层统一的网关与控制面，把不同模型服务收敛成一套稳定的协议和存储模型，供 GUI、硬件端和其他服务复用。
+它的目标不是把 LLM / ASR / TTS / multimodal vision / VAD 跑在设备上，而是提供一层统一的网关与控制面，把不同模型服务收敛成一套稳定的协议和存储模型，供 GUI、硬件端和其他服务复用。
 
 ## 当前定位
 
 AgenSense 现在同时支持两种接入方式：
 
-- **共享服务模式**：客户端使用 `Authorization: Bearer <AGENSENSE_API_KEY>` 注册 provider profile，并直接调用 ASR / LLM / TTS API
+- **共享服务模式**：客户端使用 `Authorization: Bearer <AGENSENSE_API_KEY>` 注册 provider profile，并直接调用 ASR / LLM / multimodal vision / TTS API
 - **设备兼容模式**：保留原有 `bootstrap + device token + WebSocket` 路径，兼容 ESP32 / M5Stack / HID 类设备
 
 第一种模式是现在推荐的主路径；第二种模式保留给硬件接入和本地 MVP 验证。
@@ -28,12 +28,14 @@ AgenSense 现在同时支持两种接入方式：
   - `GET/PATCH /v1/providers/{id}`
   - `POST /v1/asr/transcribe`
   - `POST /v1/llm/chat`
+  - `POST /v1/multimodal/chat`
+  - `POST /v1/vision/analyze`
   - `POST /v1/tts/synthesize`
 - `internal/gateway`：设备 WebSocket 会话、`hello`、`audio.start` / binary / `audio.stop`
 - `internal/protocol`：统一 `payload` envelope、事件类型和单流 `last_seq` 规则
 - `internal/provider`：
   - `mock://` provider
-  - OpenAI 兼容 ASR / LLM / TTS 客户端
+  - OpenAI 兼容 ASR / LLM / multimodal / TTS 客户端
 - `internal/device` + `internal/store`：provider profile、设备模型、token 逻辑、单文件 JSON 持久化 store
 
 这意味着仓库现在已经不只是“设备网关 MVP”，也已经具备了共享 AI 感知服务的一版骨架。
@@ -56,7 +58,7 @@ go run ./cmd/agensense-smoke
 
 这个 smoke runner 默认会先调用 `/v1/tts/synthesize` 生成一段测试语音，再把这段音频按麦克风流模拟 `AgenDash` 发送到 `/v1/voice/ws`，并校验 `VAD -> ASR -> LLM delta -> TTS binary`。如果服务端设置了 `AGENSENSE_DEBUG=true`，smoke 也会校验 debug trace 和音频资产。默认会创建一个独立的 `smoke-mock` provider profile，避免被本机真实 provider 状态干扰；如果要测真实 provider，可以关掉 `-ensure-mock-provider`。
 
-如果需要手动验证 provider 注册、ASR / LLM / TTS、实时 Voice WS、设备兼容接口和 debug trace，可以使用 [AgenSense GUI Lite](https://github.com/agendash/agensense-gui-lite)：
+如果需要手动验证 provider 注册、ASR / LLM / multimodal vision / TTS、实时 Voice WS、设备兼容接口和 debug trace，可以使用 [AgenSense GUI Lite](https://github.com/agendash/agensense-gui-lite)：
 
 ```sh
 cd ../agensense-gui-lite
@@ -125,6 +127,7 @@ go run ./cmd/agensense-smoke \
 - 默认模型：
   - ASR：`whisper-1`
   - LLM：`hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m`
+  - Multimodal：默认继承 LLM 模型
   - TTS：`faster-qwen3-tts`
 
 AgenSense 默认假设本机 LocalAI 监听在 `127.0.0.1:8081`，避免和 AgenSense 自己的 `8080` 端口冲突。Docker Compose 全栈模式下，AgenSense 容器会通过 `http://localai:8080/v1` 访问 LocalAI。
@@ -190,6 +193,9 @@ curl -sS \
     "llm_base_url":"'"${PROVIDER_BASE_URL}"'",
     "llm_api_key":"'"${PROVIDER_API_KEY}"'",
     "llm_model":"hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m",
+    "multimodal_base_url":"'"${PROVIDER_BASE_URL}"'",
+    "multimodal_api_key":"'"${PROVIDER_API_KEY}"'",
+    "multimodal_model":"hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m",
     "tts_base_url":"'"${PROVIDER_BASE_URL}"'",
     "tts_api_key":"'"${PROVIDER_API_KEY}"'",
     "tts_model":"faster-qwen3-tts",
@@ -197,12 +203,14 @@ curl -sS \
   }'
 ```
 
-### 3. 直接调用 ASR / LLM / TTS
+### 3. 直接调用 ASR / LLM / Multimodal / TTS
 
 注册一次后，后续可以直接使用：
 
 - `POST /v1/asr/transcribe`
 - `POST /v1/llm/chat`
+- `POST /v1/multimodal/chat`
+- `POST /v1/vision/analyze`
 - `POST /v1/tts/synthesize`
 
 这些接口默认会：
@@ -214,7 +222,7 @@ curl -sS \
 ### 4. 关于长连接
 
 - AgenSense 当前会保持**客户端到服务端**的设备 WebSocket 长连接
-- 对上游 ASR / LLM / TTS provider，当前第一版使用共享 `http.Client` 做请求复用，依赖 HTTP keep-alive
+- 对上游 ASR / LLM / multimodal / TTS provider，当前第一版使用共享 `http.Client` 做请求复用，依赖 HTTP keep-alive
 - 当前没有实现专门的“常驻 provider WebSocket / gRPC 长连接池”
 - provider profile 中保存的上游 `api_key` / `base_url` 当前会持久化到本地 `state.json`
 
@@ -250,10 +258,10 @@ curl -sS \
 当前第一版已经支持：
 
 - 基于 API key 的 provider profile 注册和持久化
-- 基于 API key 的直接 ASR / LLM / TTS 调用
+- 基于 API key 的直接 ASR / LLM / multimodal vision / TTS 调用
 - 设备兼容模式的 bootstrap + WebSocket 会话
 - `mock://` provider
-- OpenAI 兼容 ASR / LLM / TTS provider
+- OpenAI 兼容 ASR / LLM / multimodal / TTS provider
 
 当前第一版暂未补齐：
 
@@ -266,7 +274,7 @@ curl -sS \
 ## 核心定位
 
 - 客户端 / 设备侧保留轻量能力：音频采集、UI、按键 / 触摸 / HID、网络接入
-- AgenSense 统一处理：provider 配置存储、API key 隔离、ASR / LLM / TTS 编排、设备协议兼容
+- AgenSense 统一处理：provider 配置存储、API key 隔离、ASR / LLM / multimodal vision / TTS 编排、设备协议兼容
 - 模型侧全部远程化：可以接 mock、OpenAI 兼容 API、自建 ASR / TTS / LLM 服务
 
 ## 为什么单独拆一个项目
@@ -283,7 +291,7 @@ curl -sS \
 - 一套统一的共享感知服务接口
 - 一套统一的设备实时协议
 - 支持设备主动 bootstrap / claim / rebind
-- 支持多 provider 适配层，ASR / LLM / TTS / VAD 可混搭
+- 支持多 provider 适配层，ASR / LLM / multimodal / TTS / VAD 可混搭
 - 支持边缘 relay 模式，便于以后裁到低配 ARM 设备上跑
 
 ## 目录

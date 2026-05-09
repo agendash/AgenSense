@@ -67,6 +67,7 @@ Default AgenSense model names:
 
 - ASR: `whisper-1`
 - LLM: `hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m`
+- Multimodal: inherits the LLM model unless `AGENSENSE_DEFAULT_MULTIMODAL_MODEL` is set
 - TTS: `faster-qwen3-tts`
 
 Make sure your LocalAI instance has models with those IDs, or override them:
@@ -74,6 +75,7 @@ Make sure your LocalAI instance has models with those IDs, or override them:
 ```sh
 export AGENSENSE_DEFAULT_ASR_MODEL="your-asr-model"
 export AGENSENSE_DEFAULT_LLM_MODEL="your-llm-model"
+export AGENSENSE_DEFAULT_MULTIMODAL_MODEL="your-vision-capable-model"
 export AGENSENSE_DEFAULT_TTS_MODEL="your-tts-model"
 ```
 
