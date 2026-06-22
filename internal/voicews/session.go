@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -30,18 +32,27 @@ const (
 	eventASRPartial     = "asr.partial"
 	eventVADState       = "vad.state"
 
-	defaultClientID         = "agendash-voice"
-	defaultSampleRateHz     = 16000
-	defaultChannels         = 1
-	partialMinWindow        = 1500 * time.Millisecond
-	partialMinGrowthFactor  = 1200 * time.Millisecond
-	vadSpeechThreshold      = 0.012
-	vadSilenceReleaseFactor = 220 * time.Millisecond
-	realtimeTTSMaxRunes     = 48
-	realtimeTTSSoftMinRunes = 36
-	recentSpeechWindow      = 20 * time.Second
-	recentSpeechLimit       = 4
-	echoMinRunes            = 8
+	defaultClientID                 = "agendash-voice"
+	defaultSampleRateHz             = 16000
+	defaultChannels                 = 1
+	partialMinWindow                = 1500 * time.Millisecond
+	partialMinGrowthFactor          = 1200 * time.Millisecond
+	vadSpeechThreshold              = 0.012
+	vadSilenceReleaseFactor         = 220 * time.Millisecond
+	defaultRealtimeTTSMaxRunes      = 28
+	defaultRealtimeTTSSoftMinRunes  = 20
+	recentSpeechWindow              = 20 * time.Second
+	recentSpeechLimit               = 4
+	echoMinRunes                    = 8
+	echoSimilarityThreshold         = 0.86
+	playbackEchoGuardMin            = 2 * time.Second
+	playbackEchoGuardSlack          = 1500 * time.Millisecond
+	conversationIdleTimeout         = 3 * time.Minute
+	conversationTargetPct           = 70
+	conversationCompressPct         = 80
+	conversationOutputReserveTokens = 768
+	conversationRecentTurnLimit     = 6
+	conversationSummaryRuneLimit    = 2400
 )
 
 const voiceReplySystemPrompt = `You are AgenSense, a shared voice orchestration assistant for AgenDash clients.
@@ -50,20 +61,27 @@ Respond for speech playback, not a terminal or chat transcript.
 - Keep the reply to one short sentence unless the user explicitly asks for detail.
 - Target 28 Chinese characters or 16 English words.
 - Say the outcome, next action, or blocking issue directly.
+- Treat the user's message as a raw ASR transcript: it may be colloquial, fragmented, misheard, or contain filler words.
+- Silently infer the user's real intent before answering; preserve names, numbers, commands, file paths, model names, and technical terms exactly when they matter.
+- If the transcript appears to contain acoustic echo from recent assistant speech, ignore the echoed wording and answer only the user's new intent.
+- If the transcript is mostly echo or too ambiguous to act on, give a very short clarification instead of advancing the task.
 - Do not output markdown, bullet lists, JSON, XML, ANSI escapes, or tool-call notation.
 - Do not narrate hidden reasoning or internal implementation details.
 - If no remote code agent is focused, stay in local assistant mode and say that a focused agent is required for remote execution.
 - If the request clearly sounds like an approval, scene switch, or playback command, keep the wording brief and confirmation-oriented.`
 
-const voiceEchoContextPrompt = `Acoustic echo guard:
-The user's ASR transcript may contain words from your recent spoken output.
-Recent assistant speech:
-%s
-
-Latest ASR transcript:
-%s
-
-Ignore repeated assistant speech as acoustic echo. Answer only the user's new intent. Do not answer your own prior wording.`
+const mcpProposalSystemPrompt = `You are an MCP call planner for a voice gateway.
+Convert the latest raw ASR transcript into exactly one proposed MCP tool call for the client to review or execute later.
+Return only a single JSON object, with no markdown or prose.
+The JSON shape is:
+{"tool_name":"exact available tool name","arguments":{},"confidence":0.0,"requires_confirmation":true,"reason":"short reason"}
+Rules:
+- tool_name must exactly match one available tool.
+- Preserve user names, numbers, dates, locations, code identifiers, commands, and paths.
+- Put the original transcript in arguments.raw_text unless the chosen tool schema clearly has a better field.
+- If the transcript lacks required scheduling details, keep the call as a candidate and include missing_required_fields in arguments.
+- If no specialized tool fits, choose a capture-text or note-like tool when available; otherwise choose the safest available tool.
+- Never claim execution; this is only a proposed MCP call.`
 
 type sessionDeps struct {
 	conn     *wsconn.Conn
@@ -95,6 +113,8 @@ type session struct {
 	inboundAudio   []byte
 	inboundSeq     int
 	turnTrace      *debugtrace.Handle
+	inputStartedAt time.Time
+	inputEchoGuard bool
 
 	speechActive     bool
 	silenceBytes     int
@@ -112,9 +132,10 @@ type session struct {
 	lastPartialText string
 	lastPartialSize int
 
-	responseCancel context.CancelFunc
-	responseStatus responseRuntime
-	recentSpeech   []recentSpeechText
+	responseCancel    context.CancelFunc
+	responseStatus    responseRuntime
+	recentSpeech      []recentSpeechText
+	playbackEchoUntil time.Time
 
 	idCounter int64
 }
@@ -124,6 +145,7 @@ type sessionConfig struct {
 	DeviceLabel       string
 	SessionID         string
 	ProviderProfileID string
+	LLMModel          string
 	ResponseLanguage  string
 	AutoRespond       bool
 	Format            provider.AudioFormat
@@ -154,6 +176,40 @@ type recentSpeechText struct {
 	at   time.Time
 }
 
+type recentSpeechEchoMatch struct {
+	text  string
+	score float64
+}
+
+type conversationTurn struct {
+	userText      string
+	assistantText string
+	at            time.Time
+}
+
+type conversationMemory struct {
+	summary            string
+	turns              []conversationTurn
+	lastInteraction    time.Time
+	contextLimitTokens int
+}
+
+type conversationContextStats struct {
+	key            string
+	reset          bool
+	compressed     bool
+	model          string
+	contextLimit   int
+	historyBudget  int
+	includedTokens int
+	includedTurns  int
+}
+
+type conversationMemoryStore struct {
+	mu       sync.Mutex
+	sessions map[string]*conversationMemory
+}
+
 type completedSegment struct {
 	id            string
 	streamID      string
@@ -164,6 +220,8 @@ type completedSegment struct {
 	endLevel      float64
 	peakLevel     float64
 }
+
+var voiceConversationMemory = newConversationMemoryStore()
 
 type sessionUpdatePayload struct {
 	ClientID          string                          `json:"client_id,omitempty"`
@@ -204,6 +262,18 @@ type responseDonePayload struct {
 	Text       string `json:"text,omitempty"`
 	ChunkCount int    `json:"chunk_count,omitempty"`
 	AudioBytes int    `json:"audio_bytes,omitempty"`
+}
+
+type mcpProposalModelOutput struct {
+	ToolName             string         `json:"tool_name"`
+	Tool                 string         `json:"tool"`
+	Name                 string         `json:"name"`
+	Arguments            map[string]any `json:"arguments"`
+	Args                 map[string]any `json:"args"`
+	Transcript           string         `json:"transcript"`
+	Confidence           *float64       `json:"confidence"`
+	RequiresConfirmation bool           `json:"requires_confirmation"`
+	Reason               string         `json:"reason"`
 }
 
 type vadStatePayload struct {
@@ -367,6 +437,7 @@ func (s *session) handleSessionUpdate(ctx context.Context, input sessionUpdatePa
 	}
 
 	cfg.ProviderProfileID = profile.ID
+	cfg.LLMModel = strings.TrimSpace(profile.LLMModel)
 
 	s.mu.Lock()
 	s.cfg = cfg
@@ -417,6 +488,10 @@ func (s *session) handleAudioStart(payload protocol.AudioStartPayload) error {
 	if err := s.inboundTracker.Start(payload); err != nil {
 		return err
 	}
+	now := s.now()
+	cfg := s.cfg
+	playbackEchoUntil := s.playbackEchoUntil
+	inputEchoGuard := cfg.AutoRespond && now.Before(playbackEchoUntil)
 	s.inboundFormat = provider.AudioFormat{
 		Codec:        payload.Codec,
 		SampleRateHz: payload.SampleRateHz,
@@ -424,6 +499,8 @@ func (s *session) handleAudioStart(payload protocol.AudioStartPayload) error {
 	}
 	s.inboundAudio = s.inboundAudio[:0]
 	s.inboundSeq = 0
+	s.inputStartedAt = now
+	s.inputEchoGuard = inputEchoGuard
 	s.speechActive = false
 	s.silenceBytes = 0
 	s.segmentSeq = 0
@@ -441,6 +518,9 @@ func (s *session) handleAudioStart(payload protocol.AudioStartPayload) error {
 	s.turnTrace = s.startTraceLocked(payload.StreamID)
 	if s.turnTrace != nil {
 		s.turnTrace.AddEvent("ws.audio.start", fmt.Sprintf("%s · %s · %d Hz · %d ch", payload.StreamID, payload.Codec, payload.SampleRateHz, payload.Channels))
+		if inputEchoGuard {
+			s.turnTrace.AddEvent("playback.echo_guard", fmt.Sprintf("input started %s before playback echo window ended", playbackEchoUntil.Sub(now).Round(time.Millisecond)))
+		}
 	}
 	return nil
 }
@@ -464,6 +544,7 @@ func (s *session) handleAudioChunk(ctx context.Context, payload []byte) error {
 	audioSnapshot := append([]byte(nil), s.inboundAudio...)
 	streamID := stream.StreamID
 	now := s.now()
+	inputEchoGuard := s.inputEchoGuard
 	level := pcmLevel(payload)
 	speaking := level >= vadSpeechThreshold
 	stateChanged := false
@@ -499,6 +580,7 @@ func (s *session) handleAudioChunk(ctx context.Context, payload []byte) error {
 	}
 
 	canPartial := s.asr != nil &&
+		!inputEchoGuard &&
 		len(audioSnapshot) > 0 &&
 		!s.partialInFlight &&
 		(now.Sub(s.lastPartialAt) >= partialMinWindow || s.lastPartialAt.IsZero()) &&
@@ -560,10 +642,15 @@ func (s *session) handleAudioStop(ctx context.Context, payload protocol.AudioSto
 	asrClient := s.asr
 	cfg := s.cfg
 	trace := s.turnTrace
+	inputEchoGuard := s.inputEchoGuard
+	inputStartedAt := s.inputStartedAt
+	playbackEchoUntil := s.playbackEchoUntil
 	completed := s.completeActiveSegmentLocked(payload.StreamID, format, len(s.inboundAudio), 0)
 	partialCancel := s.cancelPartialASRLocked()
 	s.inboundAudio = s.inboundAudio[:0]
 	s.inboundSeq = 0
+	s.inputStartedAt = time.Time{}
+	s.inputEchoGuard = false
 	s.mu.Unlock()
 	if partialCancel != nil {
 		partialCancel()
@@ -576,6 +663,20 @@ func (s *session) handleAudioStop(ctx context.Context, payload protocol.AudioSto
 	}
 	if completed != nil {
 		s.recordCompletedSegment(completed)
+	}
+	if inputEchoGuard {
+		if trace != nil {
+			trace.AddEvent("playback.echo_suppressed", fmt.Sprintf("input_started=%s echo_until=%s audio_bytes=%d",
+				inputStartedAt.Format(time.RFC3339Nano),
+				playbackEchoUntil.Format(time.RFC3339Nano),
+				len(audio),
+			))
+			trace.AddEvent("response.done", "echo_suppressed")
+			trace.Complete()
+			s.clearTurnTrace(trace)
+		}
+		_ = s.writeEvent(eventResponseDone, responseDonePayload{Status: "echo_suppressed"})
+		return nil
 	}
 	if asrClient == nil {
 		if trace != nil {
@@ -668,6 +769,12 @@ func (s *session) runPartialASR(ctx context.Context, runID int64, asr provider.A
 	if text == "" {
 		return
 	}
+	if match, ok := s.mostlyRecentSpeechEcho(text); ok {
+		if trace := s.currentTurnTrace(); trace != nil {
+			trace.AddEvent("asr.partial.echo_suppressed", fmt.Sprintf("score=%.2f text=%s", match.score, previewDetail(text, 96)))
+		}
+		return
+	}
 
 	s.mu.Lock()
 	active, _, ok := s.inboundTracker.Active()
@@ -718,6 +825,23 @@ func (s *session) runFinalASR(ctx context.Context, asr provider.ASRClient, cfg s
 			trace.SetSegmentText(lastSegmentID, text)
 		}
 	}
+	if cfg.AutoRespond {
+		if match, ok := s.mostlyRecentSpeechEcho(text); ok {
+			if trace != nil {
+				trace.AddEvent("echo.suppressed", fmt.Sprintf("score=%.2f matched=%s", match.score, previewDetail(match.text, 96)))
+				trace.AddEvent("response.done", "echo_suppressed")
+				trace.Complete()
+				s.clearTurnTrace(trace)
+			}
+			slog.InfoContext(ctx, "voice websocket suppressed assistant echo",
+				"score", match.score,
+				"asr_preview", previewDetail(text, 96),
+				"matched_preview", previewDetail(match.text, 96),
+			)
+			_ = s.writeEvent(eventResponseDone, responseDonePayload{Status: "echo_suppressed"})
+			return
+		}
+	}
 	if err := s.writeEvent(protocol.EventASRFinal, protocol.ASRFinalPayload{
 		StreamID: streamID,
 		Text:     text,
@@ -761,6 +885,7 @@ func (s *session) runResponse(ctx context.Context, llm provider.LLMClient, tts p
 	messages := []provider.ChatMessage{
 		{Role: "system", Content: voiceReplySystemPrompt},
 		{Role: "system", Content: languageInstruction},
+		{Role: "system", Content: currentDatePrompt(s.now())},
 	}
 	if !voiceAssistant.Empty() {
 		contextPrompt := voiceAssistantPrompt(voiceAssistant)
@@ -789,7 +914,29 @@ func (s *session) runResponse(ctx context.Context, llm provider.LLMClient, tts p
 			trace.AddEvent("echo.context", previewDetail(echoPrompt, 160))
 		}
 	}
+	contextMessages, contextStats := s.conversationContextMessages(cfg, messages, text)
+	if len(contextMessages) > 0 {
+		messages = append(messages, contextMessages...)
+		if trace != nil {
+			trace.AddEvent("session_memory.context", fmt.Sprintf("model=%s limit=%d budget=%d included_tokens=%d included_turns=%d reset=%t compressed=%t",
+				contextStats.model,
+				contextStats.contextLimit,
+				contextStats.historyBudget,
+				contextStats.includedTokens,
+				contextStats.includedTurns,
+				contextStats.reset,
+				contextStats.compressed,
+			))
+		}
+	} else if trace != nil {
+		if contextStats.reset {
+			trace.AddEvent("session_memory.reset", contextStats.key)
+		}
+	}
 	messages = append(messages, provider.ChatMessage{Role: "user", Content: text})
+	if err := s.proposeMCPCall(ctx, llm, cfg, text, voiceAssistant, trace); err != nil && trace != nil {
+		trace.AddEvent("mcp.call.proposed_failed", previewDetail(err.Error(), 160))
+	}
 	if trace != nil {
 		trace.AddEvent("response.create", previewDetail(text, 96))
 		trace.AddEvent("response.language", voicelang.Label(cfg.ResponseLanguage, text))
@@ -989,10 +1136,17 @@ func (s *session) runResponse(ctx context.Context, llm provider.LLMClient, tts p
 		}
 		return
 	}
+	echoUntil := s.extendPlaybackEchoWindow(ttsFormat, ttsResult.audioBytes)
+	if trace != nil && !echoUntil.IsZero() {
+		trace.AddEvent("playback.echo_window", echoUntil.Format(time.RFC3339Nano))
+	}
 
 	status := "completed"
 	if ctx.Err() == context.Canceled {
 		status = "cancelled"
+	}
+	if status == "completed" {
+		s.rememberConversationTurn(cfg, text, replyText)
 	}
 	if trace != nil {
 		trace.AddEvent("response.done", status)
@@ -1005,6 +1159,133 @@ func (s *session) runResponse(ctx context.Context, llm provider.LLMClient, tts p
 		ChunkCount: ttsResult.chunkCount,
 		AudioBytes: ttsResult.audioBytes,
 	})
+}
+
+func (s *session) proposeMCPCall(ctx context.Context, llm provider.LLMClient, cfg sessionConfig, transcript string, voiceAssistant service.VoiceAssistantMetadata, trace *debugtrace.Handle) error {
+	transcript = strings.TrimSpace(transcript)
+	if transcript == "" || isBlankASRText(transcript) {
+		return nil
+	}
+	tools := mcpToolsFromVoiceAssistant(voiceAssistant)
+	if len(tools) == 0 {
+		return nil
+	}
+
+	proposal, err := buildMCPProposal(ctx, llm, cfg, transcript, voiceAssistant, tools)
+	if err != nil {
+		if trace != nil {
+			trace.AddEvent("mcp.call.fallback", previewDetail(err.Error(), 160))
+		}
+		proposal = fallbackMCPProposal(transcript, tools, err)
+	}
+	if proposal.ProposalID == "" {
+		proposal.ProposalID = s.nextID("mcp")
+	}
+	if proposal.Transcript == "" {
+		proposal.Transcript = transcript
+	}
+	if proposal.Arguments == nil {
+		proposal.Arguments = map[string]any{}
+	}
+	if trace != nil {
+		trace.AddEvent("mcp.call.proposed", previewDetail(proposal.ToolName, 96))
+	}
+	return s.writeEvent(protocol.EventMCPCallProposed, proposal)
+}
+
+func buildMCPProposal(ctx context.Context, llm provider.LLMClient, cfg sessionConfig, transcript string, voiceAssistant service.VoiceAssistantMetadata, tools []string) (protocol.MCPCallProposedPayload, error) {
+	if llm == nil {
+		return protocol.MCPCallProposedPayload{}, fmt.Errorf("llm client is not configured")
+	}
+	planningCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+
+	toolsJSON := compactJSON(tools)
+	contextJSON := compactJSON(mcpPlanningContext(voiceAssistant))
+	var raw strings.Builder
+	err := llm.ChatStream(planningCtx, provider.ChatRequest{
+		DeviceID:  cfg.ClientID,
+		SessionID: cfg.SessionID,
+		Messages: []provider.ChatMessage{
+			{Role: "system", Content: mcpProposalSystemPrompt},
+			{Role: "system", Content: "Available MCP tools JSON:\n" + toolsJSON},
+			{Role: "system", Content: "Client context JSON:\n" + contextJSON},
+			{Role: "user", Content: transcript},
+		},
+	}, func(delta provider.ChatDelta) error {
+		raw.WriteString(delta.Text)
+		return nil
+	})
+	if err != nil {
+		return protocol.MCPCallProposedPayload{}, err
+	}
+	return parseMCPProposal(raw.String(), transcript, tools)
+}
+
+func parseMCPProposal(raw string, transcript string, tools []string) (protocol.MCPCallProposedPayload, error) {
+	data, err := extractJSONObject(raw)
+	if err != nil {
+		return protocol.MCPCallProposedPayload{}, err
+	}
+	var parsed mcpProposalModelOutput
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return protocol.MCPCallProposedPayload{}, fmt.Errorf("invalid mcp proposal JSON: %w", err)
+	}
+	toolName := strings.TrimSpace(parsed.ToolName)
+	if toolName == "" {
+		toolName = strings.TrimSpace(parsed.Tool)
+	}
+	if toolName == "" {
+		toolName = strings.TrimSpace(parsed.Name)
+	}
+	if !mcpToolAllowed(toolName, tools) {
+		return protocol.MCPCallProposedPayload{}, fmt.Errorf("mcp proposal selected unavailable tool %q", toolName)
+	}
+
+	args := parsed.Arguments
+	if len(args) == 0 {
+		args = parsed.Args
+	}
+	if args == nil {
+		args = map[string]any{}
+	}
+	if _, ok := args["raw_text"]; !ok {
+		args["raw_text"] = transcript
+	}
+
+	confidence := 0.7
+	if parsed.Confidence != nil {
+		confidence = *parsed.Confidence
+	}
+	if confidence < 0 || confidence > 1 {
+		return protocol.MCPCallProposedPayload{}, fmt.Errorf("mcp proposal confidence %.3f is outside 0..1", confidence)
+	}
+	return protocol.MCPCallProposedPayload{
+		ToolName:             toolName,
+		Arguments:            args,
+		Transcript:           firstNonEmpty(parsed.Transcript, transcript),
+		Confidence:           confidence,
+		RequiresConfirmation: parsed.RequiresConfirmation,
+		Reason:               strings.TrimSpace(parsed.Reason),
+	}, nil
+}
+
+func fallbackMCPProposal(transcript string, tools []string, cause error) protocol.MCPCallProposedPayload {
+	toolName := safestMCPTool(tools)
+	reason := "LLM did not return a valid MCP proposal; falling back to raw transcript capture."
+	if cause != nil && strings.TrimSpace(cause.Error()) != "" {
+		reason = reason + " " + cause.Error()
+	}
+	return protocol.MCPCallProposedPayload{
+		ToolName: toolName,
+		Arguments: map[string]any{
+			"raw_text": transcript,
+		},
+		Transcript:           transcript,
+		Confidence:           0.35,
+		RequiresConfirmation: true,
+		Reason:               reason,
+	}
 }
 
 func (s *session) runRealtimeTTS(ctx context.Context, tts provider.TTSClient, cfg sessionConfig, format provider.AudioFormat, trace *debugtrace.Handle, segments <-chan string) realtimeTTSResult {
@@ -1092,14 +1373,40 @@ func (s *realtimeTTSSegmenter) Add(text string) []string {
 		return nil
 	}
 	var segments []string
+	maxRunes := realtimeTTSMaxRunes()
+	softMinRunes := realtimeTTSSoftMinRunes(maxRunes)
 	for _, r := range text {
 		s.buf.WriteRune(r)
 		s.runeCount++
-		if isRealtimeTTSSentenceBreak(r) || r == '\n' || s.runeCount >= realtimeTTSMaxRunes || (s.runeCount >= realtimeTTSSoftMinRunes && isRealtimeTTSSoftBreak(r)) {
+		if isRealtimeTTSSentenceBreak(r) || r == '\n' || s.runeCount >= maxRunes || (s.runeCount >= softMinRunes && isRealtimeTTSSoftBreak(r)) {
 			segments = appendFlushedRealtimeTTSSegment(segments, s)
 		}
 	}
 	return segments
+}
+
+func realtimeTTSMaxRunes() int {
+	return realtimeTTSEnvInt("AGENSENSE_REALTIME_TTS_MAX_RUNES", defaultRealtimeTTSMaxRunes)
+}
+
+func realtimeTTSSoftMinRunes(maxRunes int) int {
+	softMin := realtimeTTSEnvInt("AGENSENSE_REALTIME_TTS_SOFT_MIN_RUNES", defaultRealtimeTTSSoftMinRunes)
+	if softMin > maxRunes {
+		return maxRunes
+	}
+	return softMin
+}
+
+func realtimeTTSEnvInt(name string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
 }
 
 func (s *realtimeTTSSegmenter) Flush() []string {
@@ -1188,9 +1495,101 @@ func (s *session) recentSpeechPrompt(asrText string) string {
 	}
 	lines := make([]string, 0, len(items))
 	for _, item := range items {
-		lines = append(lines, "- "+item.text)
+		lines = append(lines, strings.TrimSpace(item.text))
 	}
-	return fmt.Sprintf(voiceEchoContextPrompt, strings.Join(lines, "\n"), strings.TrimSpace(asrText))
+	return fmt.Sprintf(
+		"Recent assistant speech, for echo cleanup only: %s\nRaw latest ASR: %s\nIf the ASR contains both echo and a new request, ignore the echo and answer only the new request.",
+		strings.Join(lines, " | "),
+		strings.TrimSpace(asrText),
+	)
+}
+
+func (s *session) mostlyRecentSpeechEcho(asrText string) (recentSpeechEchoMatch, bool) {
+	asrNormalized := normalizeEchoText(asrText)
+	if len([]rune(asrNormalized)) < echoMinRunes {
+		return recentSpeechEchoMatch{}, false
+	}
+	var best recentSpeechEchoMatch
+	for _, candidate := range recentSpeechCandidates(s.recentSpeechSnapshot()) {
+		candidateNormalized := normalizeEchoText(candidate)
+		if len([]rune(candidateNormalized)) < echoMinRunes {
+			continue
+		}
+		score, matched := recentSpeechEchoScore(asrNormalized, candidateNormalized)
+		if score > best.score {
+			best = recentSpeechEchoMatch{text: candidate, score: score}
+		}
+		if matched {
+			return recentSpeechEchoMatch{text: candidate, score: score}, true
+		}
+	}
+	return best, false
+}
+
+func recentSpeechCandidates(items []recentSpeechText) []string {
+	candidates := make([]string, 0, len(items)*2)
+	for start := range items {
+		var combined strings.Builder
+		for end := start; end < len(items); end++ {
+			text := strings.TrimSpace(items[end].text)
+			if text == "" {
+				continue
+			}
+			if combined.Len() > 0 {
+				combined.WriteString(" ")
+			}
+			combined.WriteString(text)
+			candidates = append(candidates, text)
+			if end > start {
+				candidates = append(candidates, combined.String())
+			}
+		}
+	}
+	return candidates
+}
+
+func recentSpeechEchoScore(asrNormalized string, candidateNormalized string) (float64, bool) {
+	asrRunes := len([]rune(asrNormalized))
+	candidateRunes := len([]rune(candidateNormalized))
+	if asrRunes == 0 || candidateRunes == 0 {
+		return 0, false
+	}
+	if strings.Contains(candidateNormalized, asrNormalized) {
+		return 1, true
+	}
+	if strings.Contains(asrNormalized, candidateNormalized) {
+		extraRunes := asrRunes - candidateRunes
+		score := float64(candidateRunes) / float64(asrRunes)
+		return score, extraRunes <= max(2, asrRunes/10)
+	}
+	common := longestCommonSubsequenceRunes(asrNormalized, candidateNormalized)
+	asrCoverage := float64(common) / float64(asrRunes)
+	candidateCoverage := float64(common) / float64(candidateRunes)
+	return asrCoverage, asrCoverage >= echoSimilarityThreshold && candidateCoverage >= 0.55
+}
+
+func longestCommonSubsequenceRunes(a string, b string) int {
+	left := []rune(a)
+	right := []rune(b)
+	if len(left) == 0 || len(right) == 0 {
+		return 0
+	}
+	previous := make([]int, len(right)+1)
+	current := make([]int, len(right)+1)
+	for _, lr := range left {
+		for j, rr := range right {
+			if lr == rr {
+				current[j+1] = previous[j] + 1
+			} else {
+				current[j+1] = max(current[j], previous[j+1])
+			}
+		}
+		previous, current = current, previous
+		for j := range current {
+			current[j] = 0
+		}
+	}
+	return previous[len(right)]
 }
 
 func (s *session) recentSpeechSnapshot() []recentSpeechText {
@@ -1211,6 +1610,391 @@ func (s *session) recentSpeechSnapshot() []recentSpeechText {
 		s.recentSpeech = items
 	}
 	return append([]recentSpeechText(nil), items...)
+}
+
+func (s *session) extendPlaybackEchoWindow(format provider.AudioFormat, audioBytes int) time.Time {
+	duration := playbackEchoGuardDuration(format, audioBytes)
+	if duration <= 0 {
+		return time.Time{}
+	}
+	until := s.now().Add(duration)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if until.After(s.playbackEchoUntil) {
+		s.playbackEchoUntil = until
+	}
+	return s.playbackEchoUntil
+}
+
+func playbackEchoGuardDuration(format provider.AudioFormat, audioBytes int) time.Duration {
+	playback := formatByteDuration(format, audioBytes)
+	if playback <= 0 {
+		return 0
+	}
+	if playback < playbackEchoGuardMin {
+		playback = playbackEchoGuardMin
+	}
+	return playback + playbackEchoGuardSlack
+}
+
+func newConversationMemoryStore() *conversationMemoryStore {
+	return &conversationMemoryStore{
+		sessions: make(map[string]*conversationMemory),
+	}
+}
+
+func (s *session) conversationContextMessages(cfg sessionConfig, baseMessages []provider.ChatMessage, latestUserText string) ([]provider.ChatMessage, conversationContextStats) {
+	opts := conversationOptionsFromConfig(cfg)
+	key := s.conversationMemoryKey(cfg)
+	stats := conversationContextStats{
+		key:           s.conversationDisplayKey(cfg),
+		model:         cfg.LLMModel,
+		contextLimit:  opts.contextLimitTokens,
+		historyBudget: 0,
+	}
+	if key == "" {
+		return nil, stats
+	}
+
+	now := s.now()
+	summary, turns, reset, compressed := voiceConversationMemory.snapshot(key, now, opts)
+	stats.reset = reset
+	stats.compressed = compressed
+
+	baseTokens := estimateMessagesTokens(baseMessages) + estimateMessageTokens(provider.ChatMessage{Role: "user", Content: latestUserText}) + opts.outputReserveTokens
+	historyBudget := (opts.contextLimitTokens*opts.targetPercent)/100 - baseTokens
+	stats.historyBudget = historyBudget
+	if historyBudget <= 0 {
+		return nil, stats
+	}
+
+	var out []provider.ChatMessage
+	includedTokens := 0
+	if strings.TrimSpace(summary) != "" {
+		message := provider.ChatMessage{
+			Role:    "system",
+			Content: "Conversation memory summary from earlier turns. Use it only to resolve pronouns, follow-up instructions, confirmations, and corrections. Do not quote it unless the user asks.\n" + summary,
+		}
+		tokens := estimateMessageTokens(message)
+		if tokens <= historyBudget {
+			out = append(out, message)
+			includedTokens += tokens
+		}
+	}
+
+	var recent []provider.ChatMessage
+	for index := len(turns) - 1; index >= 0; index-- {
+		turn := turns[index]
+		turnMessages := []provider.ChatMessage{
+			{Role: "user", Content: turn.userText},
+			{Role: "assistant", Content: turn.assistantText},
+		}
+		tokens := estimateMessagesTokens(turnMessages)
+		if includedTokens+tokens > historyBudget {
+			continue
+		}
+		recent = append(turnMessages, recent...)
+		includedTokens += tokens
+		stats.includedTurns++
+	}
+
+	out = append(out, recent...)
+	stats.includedTokens = includedTokens
+	return out, stats
+}
+
+func (s *session) rememberConversationTurn(cfg sessionConfig, userText string, assistantText string) {
+	userText = strings.TrimSpace(userText)
+	assistantText = strings.TrimSpace(assistantText)
+	if userText == "" || assistantText == "" || isBlankASRText(userText) {
+		return
+	}
+	key := s.conversationMemoryKey(cfg)
+	if key == "" {
+		return
+	}
+	voiceConversationMemory.append(key, conversationTurn{
+		userText:      userText,
+		assistantText: assistantText,
+		at:            s.now(),
+	}, conversationOptionsFromConfig(cfg))
+}
+
+func (s *session) conversationMemoryKey(cfg sessionConfig) string {
+	sessionID := strings.TrimSpace(cfg.SessionID)
+	if sessionID == "" {
+		return ""
+	}
+	return strings.Join([]string{
+		strings.TrimSpace(s.apiKey),
+		strings.TrimSpace(cfg.ProviderProfileID),
+		strings.TrimSpace(cfg.ClientID),
+		sessionID,
+	}, "\x00")
+}
+
+func (s *session) conversationDisplayKey(cfg sessionConfig) string {
+	parts := []string{strings.TrimSpace(cfg.ClientID), strings.TrimSpace(cfg.SessionID)}
+	clean := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part != "" {
+			clean = append(clean, part)
+		}
+	}
+	return strings.Join(clean, "/")
+}
+
+func (store *conversationMemoryStore) snapshot(key string, now time.Time, opts conversationOptions) (string, []conversationTurn, bool, bool) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	mem := store.sessions[key]
+	if mem == nil {
+		mem = &conversationMemory{contextLimitTokens: opts.contextLimitTokens}
+		store.sessions[key] = mem
+	}
+
+	reset := false
+	if !mem.lastInteraction.IsZero() && now.Sub(mem.lastInteraction) > opts.idleTimeout {
+		mem.summary = ""
+		mem.turns = nil
+		reset = true
+	}
+	mem.contextLimitTokens = opts.contextLimitTokens
+
+	compressed := compressConversationMemoryLocked(mem, opts)
+	return mem.summary, append([]conversationTurn(nil), mem.turns...), reset, compressed
+}
+
+func (store *conversationMemoryStore) append(key string, turn conversationTurn, opts conversationOptions) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	mem := store.sessions[key]
+	if mem == nil {
+		mem = &conversationMemory{contextLimitTokens: opts.contextLimitTokens}
+		store.sessions[key] = mem
+	}
+	if !mem.lastInteraction.IsZero() && turn.at.Sub(mem.lastInteraction) > opts.idleTimeout {
+		mem.summary = ""
+		mem.turns = nil
+	}
+	mem.contextLimitTokens = opts.contextLimitTokens
+	mem.turns = append(mem.turns, turn)
+	mem.lastInteraction = turn.at
+	compressConversationMemoryLocked(mem, opts)
+}
+
+type conversationOptions struct {
+	contextLimitTokens  int
+	targetPercent       int
+	compressPercent     int
+	outputReserveTokens int
+	recentTurnLimit     int
+	idleTimeout         time.Duration
+	summaryRuneLimit    int
+}
+
+func conversationOptionsFromConfig(cfg sessionConfig) conversationOptions {
+	opts := conversationOptions{
+		contextLimitTokens:  inferModelContextLimitTokens(cfg.LLMModel),
+		targetPercent:       conversationTargetPct,
+		compressPercent:     conversationCompressPct,
+		outputReserveTokens: conversationOutputReserveTokens,
+		recentTurnLimit:     conversationRecentTurnLimit,
+		idleTimeout:         conversationIdleTimeout,
+		summaryRuneLimit:    conversationSummaryRuneLimit,
+	}
+
+	for _, source := range []map[string]any{cfg.VoiceAssistant.Metadata, cfg.VoiceAssistant.UIContext} {
+		for _, scoped := range []map[string]any{source, mapValue(source, "context_management"), mapValue(source, "session_context")} {
+			if len(scoped) == 0 {
+				continue
+			}
+			if value, ok := positiveIntValue(scoped["max_context_tokens"]); ok {
+				opts.contextLimitTokens = value
+			}
+			if value, ok := positiveIntValue(scoped["target_context_percent"]); ok {
+				opts.targetPercent = clampInt(value, 20, 95)
+			}
+			if value, ok := positiveIntValue(scoped["compress_context_percent"]); ok {
+				opts.compressPercent = clampInt(value, opts.targetPercent, 98)
+			}
+			if value, ok := positiveIntValue(scoped["output_reserve_tokens"]); ok {
+				opts.outputReserveTokens = value
+			}
+			if value, ok := positiveIntValue(scoped["recent_turns"]); ok {
+				opts.recentTurnLimit = clampInt(value, 1, 32)
+			}
+			if value, ok := positiveIntValue(scoped["idle_timeout_seconds"]); ok {
+				opts.idleTimeout = time.Duration(value) * time.Second
+			}
+			if value, ok := positiveIntValue(scoped["summary_rune_limit"]); ok {
+				opts.summaryRuneLimit = clampInt(value, 400, 12_000)
+			}
+		}
+	}
+
+	if opts.contextLimitTokens < 2048 {
+		opts.contextLimitTokens = 2048
+	}
+	if opts.compressPercent < opts.targetPercent {
+		opts.compressPercent = opts.targetPercent
+	}
+	return opts
+}
+
+func inferModelContextLimitTokens(model string) int {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	switch {
+	case normalized == "":
+		return 32_768
+	case strings.Contains(normalized, "1m") || strings.Contains(normalized, "1000k") || strings.Contains(normalized, "1048k"):
+		return 1_048_576
+	case strings.Contains(normalized, "512k"):
+		return 524_288
+	case strings.Contains(normalized, "256k") || strings.Contains(normalized, "262k") || strings.Contains(normalized, "qwen3.6"):
+		return 262_144
+	case strings.Contains(normalized, "128k") || strings.Contains(normalized, "qwen3") || strings.Contains(normalized, "qwen2.5"):
+		return 131_072
+	case strings.Contains(normalized, "64k"):
+		return 65_536
+	case strings.Contains(normalized, "32k"):
+		return 32_768
+	case strings.Contains(normalized, "16k"):
+		return 16_384
+	case strings.Contains(normalized, "8k"):
+		return 8_192
+	case strings.Contains(normalized, "4k"):
+		return 4_096
+	default:
+		return 32_768
+	}
+}
+
+func compressConversationMemoryLocked(mem *conversationMemory, opts conversationOptions) bool {
+	compressed := false
+	if len(mem.turns) > opts.recentTurnLimit {
+		cut := len(mem.turns) - opts.recentTurnLimit
+		mem.summary = mergeConversationSummary(mem.summary, mem.turns[:cut], opts.summaryRuneLimit)
+		mem.turns = append([]conversationTurn(nil), mem.turns[cut:]...)
+		compressed = true
+	}
+
+	threshold := (opts.contextLimitTokens * opts.compressPercent) / 100
+	for estimateConversationMemoryTokens(mem) > threshold && len(mem.turns) > 1 {
+		mem.summary = mergeConversationSummary(mem.summary, mem.turns[:1], opts.summaryRuneLimit)
+		mem.turns = append([]conversationTurn(nil), mem.turns[1:]...)
+		compressed = true
+	}
+	if estimateTokens(mem.summary) > threshold/2 {
+		mem.summary = truncateRunes(mem.summary, opts.summaryRuneLimit/2)
+		compressed = true
+	}
+	return compressed
+}
+
+func mergeConversationSummary(existing string, turns []conversationTurn, limit int) string {
+	var lines []string
+	if strings.TrimSpace(existing) != "" {
+		lines = append(lines, strings.TrimSpace(existing))
+	}
+	for _, turn := range turns {
+		lines = append(lines, fmt.Sprintf("- %s user: %s assistant: %s",
+			turn.at.UTC().Format(time.RFC3339),
+			truncateRunes(strings.TrimSpace(turn.userText), 220),
+			truncateRunes(strings.TrimSpace(turn.assistantText), 220),
+		))
+	}
+	return truncateRunes(strings.Join(lines, "\n"), limit)
+}
+
+func estimateConversationMemoryTokens(mem *conversationMemory) int {
+	total := estimateTokens(mem.summary)
+	for _, turn := range mem.turns {
+		total += estimateMessagesTokens([]provider.ChatMessage{
+			{Role: "user", Content: turn.userText},
+			{Role: "assistant", Content: turn.assistantText},
+		})
+	}
+	return total
+}
+
+func estimateMessagesTokens(messages []provider.ChatMessage) int {
+	total := 0
+	for _, message := range messages {
+		total += estimateMessageTokens(message)
+	}
+	return total
+}
+
+func estimateMessageTokens(message provider.ChatMessage) int {
+	return 4 + estimateTokens(message.Role) + estimateTokens(message.Content)
+}
+
+func estimateTokens(text string) int {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return 0
+	}
+	asciiRunes := 0
+	tokens := 0
+	for _, r := range text {
+		switch {
+		case unicode.In(r, unicode.Han, unicode.Hiragana, unicode.Katakana, unicode.Hangul):
+			tokens++
+		case r > 127:
+			tokens++
+		default:
+			asciiRunes++
+		}
+	}
+	tokens += (asciiRunes + 3) / 4
+	if tokens <= 0 {
+		return 1
+	}
+	return tokens
+}
+
+func mapValue(source map[string]any, key string) map[string]any {
+	if source == nil {
+		return nil
+	}
+	value, ok := source[key]
+	if !ok {
+		return nil
+	}
+	typed, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	return typed
+}
+
+func positiveIntValue(value any) (int, bool) {
+	switch typed := value.(type) {
+	case int:
+		return typed, typed > 0
+	case int64:
+		return int(typed), typed > 0
+	case float64:
+		return int(typed), typed > 0
+	case json.Number:
+		parsed, err := typed.Int64()
+		return int(parsed), err == nil && parsed > 0
+	default:
+		return 0, false
+	}
+}
+
+func clampInt(value int, min int, max int) int {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
 }
 
 func normalizeEchoText(text string) string {
@@ -1270,6 +2054,12 @@ func (s *session) cancelPartialASR() {
 	if cancel != nil {
 		cancel()
 	}
+}
+
+func (s *session) currentTurnTrace() *debugtrace.Handle {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.turnTrace
 }
 
 func (s *session) cancelPartialASRLocked() context.CancelFunc {
@@ -1429,15 +2219,48 @@ func previewDetail(text string, limit int) string {
 	return text[:limit] + "..."
 }
 
+func truncateRunes(text string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	return string(runes[:limit])
+}
+
 func voiceAssistantPrompt(metadata service.VoiceAssistantMetadata) string {
 	if metadata.Empty() {
 		return ""
 	}
-	payload := compactJSON(metadata)
+	payload := compactJSON(sanitizedVoiceAssistantMetadata(metadata))
 	if payload == "" {
 		return ""
 	}
 	return "AgenDash Universal Voice Layer context JSON. Use it only to resolve scope, target, UI surface, and confirmation safety. Do not read raw JSON back to the user unless asked.\n" + payload
+}
+
+func currentDatePrompt(now time.Time) string {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	return "Current server date: " + now.Format("2006-01-02") + ". Use this for date questions."
+}
+
+func sanitizedVoiceAssistantMetadata(metadata service.VoiceAssistantMetadata) service.VoiceAssistantMetadata {
+	if len(metadata.Metadata) == 0 {
+		return metadata
+	}
+	next := metadata
+	next.Metadata = make(map[string]any, len(metadata.Metadata))
+	for key, value := range metadata.Metadata {
+		if strings.EqualFold(strings.TrimSpace(key), "shared_system_prompt") {
+			continue
+		}
+		next.Metadata[key] = value
+	}
+	return next
 }
 
 func sharedSystemPrompt(metadata service.VoiceAssistantMetadata) string {
@@ -1452,7 +2275,127 @@ func sharedSystemPrompt(metadata service.VoiceAssistantMetadata) string {
 	if !ok {
 		return ""
 	}
-	return strings.TrimSpace(prompt)
+	prompt = strings.TrimSpace(prompt)
+	if samePrompt(prompt, voiceReplySystemPrompt) {
+		return ""
+	}
+	return prompt
+}
+
+func samePrompt(left string, right string) bool {
+	return strings.Join(strings.Fields(left), " ") == strings.Join(strings.Fields(right), " ")
+}
+
+func mcpToolsFromVoiceAssistant(metadata service.VoiceAssistantMetadata) []string {
+	seen := map[string]bool{}
+	var tools []string
+	for _, source := range []map[string]any{metadata.Metadata, metadata.UIContext} {
+		for _, key := range []string{"mcp_tools", "available_mcp_tools", "tools"} {
+			if source == nil {
+				continue
+			}
+			tools = appendMCPTools(tools, seen, source[key])
+		}
+	}
+	if metadata.AssistantIntent != nil {
+		for _, key := range []string{"mcp_tools", "available_mcp_tools", "tools"} {
+			tools = appendMCPTools(tools, seen, metadata.AssistantIntent.Args[key])
+		}
+	}
+	return tools
+}
+
+func appendMCPTools(out []string, seen map[string]bool, value any) []string {
+	switch typed := value.(type) {
+	case string:
+		return appendMCPTool(out, seen, typed)
+	case []string:
+		for _, item := range typed {
+			out = appendMCPTool(out, seen, item)
+		}
+	case []any:
+		for _, item := range typed {
+			out = appendMCPTools(out, seen, item)
+		}
+	case map[string]any:
+		for _, key := range []string{"tool_name", "name", "id"} {
+			if name, ok := typed[key].(string); ok {
+				out = appendMCPTool(out, seen, name)
+			}
+		}
+	}
+	return out
+}
+
+func appendMCPTool(out []string, seen map[string]bool, name string) []string {
+	name = strings.TrimSpace(name)
+	if name == "" || seen[name] {
+		return out
+	}
+	seen[name] = true
+	return append(out, name)
+}
+
+func mcpPlanningContext(metadata service.VoiceAssistantMetadata) map[string]any {
+	out := map[string]any{
+		"contract":         metadata.Contract,
+		"ui_context":       metadata.UIContext,
+		"assistant_intent": metadata.AssistantIntent,
+	}
+	if len(metadata.Metadata) > 0 {
+		clean := make(map[string]any, len(metadata.Metadata))
+		for key, value := range metadata.Metadata {
+			if key == "shared_system_prompt" {
+				continue
+			}
+			clean[key] = value
+		}
+		out["metadata"] = clean
+	}
+	return out
+}
+
+func extractJSONObject(raw string) ([]byte, error) {
+	raw = strings.TrimSpace(raw)
+	start := strings.Index(raw, "{")
+	end := strings.LastIndex(raw, "}")
+	if start < 0 || end < start {
+		return nil, fmt.Errorf("mcp proposal response did not contain a JSON object")
+	}
+	return []byte(raw[start : end+1]), nil
+}
+
+func mcpToolAllowed(toolName string, tools []string) bool {
+	for _, tool := range tools {
+		if toolName == tool {
+			return true
+		}
+	}
+	return false
+}
+
+func safestMCPTool(tools []string) string {
+	if len(tools) == 0 {
+		return ""
+	}
+	for _, preferred := range []string{"capture_text", "create_note", "note", "memory"} {
+		for _, tool := range tools {
+			if strings.Contains(strings.ToLower(tool), preferred) {
+				return tool
+			}
+		}
+	}
+	return tools[0]
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func resolveResponseLanguage(current string, explicit string, metadata map[string]any, voiceAssistant service.VoiceAssistantMetadata) string {

@@ -2,7 +2,7 @@
 
 Reusable AI sensing gateway for AgenDash, AgenLeash, hardware devices, and other clients.
 
-AgenSense does not run LLM, ASR, TTS, or VAD models on edge devices by default. It provides a stable gateway, provider registry, direct inference API, and device-compatible voice protocol so clients can share the same model configuration and runtime behavior.
+AgenSense does not run LLM, ASR, TTS, multimodal vision, or VAD models on edge devices by default. It provides a stable gateway, provider registry, direct inference API, and device-compatible voice protocol so clients can share the same model configuration and runtime behavior.
 
 Chinese documentation is available in [README.zh-CN.md](README.zh-CN.md).
 
@@ -10,7 +10,7 @@ Chinese documentation is available in [README.zh-CN.md](README.zh-CN.md).
 
 AgenSense is currently a local-first Go service with two supported access paths:
 
-- Shared service mode: clients use `Authorization: Bearer <AGENSENSE_API_KEY>` to register provider profiles and call ASR, LLM, and TTS APIs directly.
+- Shared service mode: clients use `Authorization: Bearer <AGENSENSE_API_KEY>` to register provider profiles and call ASR, LLM, multimodal vision, and TTS APIs directly.
 - Device compatibility mode: devices use bootstrap, device tokens, and a WebSocket voice session for ESP32/M5Stack/HID-style integrations.
 
 The shared service mode is the preferred path for desktop, GUI, service, and third-party clients. The device path remains useful for hardware integration and protocol regression.
@@ -23,10 +23,12 @@ The shared service mode is the preferred path for desktop, GUI, service, and thi
 - Direct APIs:
   - `POST /v1/asr/transcribe`
   - `POST /v1/llm/chat`
+  - `POST /v1/multimodal/chat`
+  - `POST /v1/vision/analyze`
   - `POST /v1/tts/synthesize`
 - Provider support:
   - `mock://` provider for local development
-  - OpenAI-compatible ASR, LLM, and TTS clients
+  - OpenAI-compatible ASR, LLM, multimodal, and TTS clients
 - Device compatibility APIs:
   - `POST /v1/bootstrap`
   - `GET /v1/device/config`
@@ -61,14 +63,14 @@ The service listens on `127.0.0.1:8080` by default.
 curl -sS http://127.0.0.1:8080/healthz
 ```
 
-The default provider profile points at a local LocalAI server:
+The default provider profile points at the local oMLX OpenAI-compatible service:
 
 - API key: `demo-user-key`
-- profile id: `default`
-- base URL: `http://127.0.0.1:8081/v1`
-- models: `whisper-1`, `hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m`, `faster-qwen3-tts`
+- profile id: `omlx-local`
+- base URL: `http://127.0.0.1:8000/v1`
+- models: ASR `nemotron-3.5-asr-streaming-0.6b-8bit`, LLM `gemma-4-E4B-it-MLX-4bit`, multimodal `Qwen3.6-27B-MLX-4bit`, TTS `Qwen3-TTS-12Hz-0.6B-Base-8bit`, VAD `silero-vad-v6`
 
-AgenSense uses port `8080`, so the documented LocalAI host port is `8081`. Inside the optional Docker Compose full stack, AgenSense reaches LocalAI at `http://localai:8080/v1`.
+The WebSocket voice path uses AgenSense's built-in level-based VAD before sending speech segments to ASR. The oMLX `silero-vad-v6` model can be stored in provider profiles, but current oMLX builds do not expose it through the same served audio API as ASR/TTS.
 
 ## Direct Inference
 
@@ -91,25 +93,31 @@ To point AgenSense at an OpenAI-compatible upstream, register a provider profile
 
 ```sh
 export AGENSENSE_API_KEY="demo-user-key"
-export PROVIDER_BASE_URL="http://127.0.0.1:8081/v1"
-export PROVIDER_API_KEY="replace-me"
+export PROVIDER_BASE_URL="http://127.0.0.1:8000/v1"
+export PROVIDER_API_KEY=""
 
 curl -sS \
   -X POST http://127.0.0.1:8080/v1/providers \
   -H "Authorization: Bearer ${AGENSENSE_API_KEY}" \
   -H 'content-type: application/json' \
   -d '{
-    "id":"default",
-    "name":"OpenAI Compatible Default",
+    "id":"omlx-local",
+    "name":"oMLX Local Voice Stack",
     "asr_base_url":"'"${PROVIDER_BASE_URL}"'",
     "asr_api_key":"'"${PROVIDER_API_KEY}"'",
-    "asr_model":"whisper-1",
+    "asr_model":"nemotron-3.5-asr-streaming-0.6b-8bit",
     "llm_base_url":"'"${PROVIDER_BASE_URL}"'",
     "llm_api_key":"'"${PROVIDER_API_KEY}"'",
-    "llm_model":"hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m",
+    "llm_model":"gemma-4-E4B-it-MLX-4bit",
+    "multimodal_base_url":"'"${PROVIDER_BASE_URL}"'",
+    "multimodal_api_key":"'"${PROVIDER_API_KEY}"'",
+    "multimodal_model":"Qwen3.6-27B-MLX-4bit",
     "tts_base_url":"'"${PROVIDER_BASE_URL}"'",
     "tts_api_key":"'"${PROVIDER_API_KEY}"'",
-    "tts_model":"faster-qwen3-tts",
+    "tts_model":"Qwen3-TTS-12Hz-0.6B-Base-8bit",
+    "vad_base_url":"'"${PROVIDER_BASE_URL}"'",
+    "vad_api_key":"'"${PROVIDER_API_KEY}"'",
+    "vad_model":"silero-vad-v6",
     "default":true
   }'
 ```
@@ -157,6 +165,12 @@ Docker Compose:
 docker compose up --build
 ```
 
+Docker Compose with host oMLX:
+
+```sh
+./scripts/omlx-up.sh
+```
+
 Full local stack with LocalAI:
 
 ```sh
@@ -164,6 +178,7 @@ Full local stack with LocalAI:
 ```
 
 See [docs/deployment.md](docs/deployment.md) for binary, shell script, and Docker Compose workflows.
+See [docs/omlx.md](docs/omlx.md) for oMLX setup and model-name expectations.
 See [docs/localai.md](docs/localai.md) for LocalAI setup and model-name expectations.
 
 ## Configuration
@@ -176,14 +191,20 @@ Common environment variables:
 - `AGENSENSE_LOG_LEVEL`: `debug`, `info`, `warn`, or `error`
 - `AGENSENSE_DEBUG=true`: enables `/debug/*` trace UI and audio assets
 - `AGENSENSE_DISABLE_DEMO_SEED=true`: disables the built-in demo device seed
-- `AGENSENSE_DEFAULT_PROVIDER_BASE_URL`: default provider base URL, default `http://127.0.0.1:8081/v1`
+- `AGENSENSE_DEFAULT_PROVIDER_BASE_URL`: default provider base URL, default `http://127.0.0.1:8000/v1`
 - `AGENSENSE_DEFAULT_PROVIDER_API_KEY`: default upstream provider API key
+- `AGENSENSE_DEFAULT_MULTIMODAL_MODEL`: optional default multimodal model; inherits `AGENSENSE_DEFAULT_LLM_MODEL` when unset
 - `AGENSENSE_ASR_CHINESE_SCRIPT`: Chinese transcript normalization, default `zh-Hans`; set `original` to keep upstream ASR text unchanged
 - `AGENSENSE_OPENAI_ASR_LANGUAGE`: optional OpenAI-compatible ASR language hint
 - `AGENSENSE_OPENAI_ASR_PROMPT`: optional OpenAI-compatible ASR prompt; the default asks Chinese transcripts to use Simplified Chinese
-- `AGENSENSE_OPENAI_TTS_VOICE`: OpenAI-compatible TTS voice, default example `Serena`; set `none` if the upstream rejects the voice field
+- `AGENSENSE_OPENAI_REASONING_EFFORT`: OpenAI-compatible reasoning effort, default local oMLX value `none`
+- `AGENSENSE_OPENAI_TTS_VOICE`: OpenAI-compatible TTS voice; use `none` for oMLX, while some LocalAI TTS backends accept named voices such as `Serena`
 - `AGENSENSE_OPENAI_TTS_RESPONSE_FORMAT`: requested TTS response format, default `pcm`
-- `AGENSENSE_OPENAI_TTS_SENTENCE_STREAM`: optional sentence-level TTS chunking, default `0`
+- `AGENSENSE_OPENAI_TTS_SENTENCE_STREAM`: optional provider-side TTS text chunking, default local oMLX value `1`
+- `AGENSENSE_OPENAI_TTS_SEGMENT_MAX_RUNES`: max text runes per provider TTS request, default local oMLX value `32`
+- `AGENSENSE_OPENAI_TTS_SEGMENT_SILENCE_MS`: silence inserted between provider TTS segments, default local oMLX value `80`
+- `AGENSENSE_REALTIME_TTS_MAX_RUNES`: max realtime Voice WS text runes before a TTS segment is emitted, default `28`
+- `AGENSENSE_REALTIME_TTS_SOFT_MIN_RUNES`: soft punctuation split threshold for realtime Voice WS TTS, default `20`
 
 ## Documentation
 
@@ -194,6 +215,7 @@ Common environment variables:
 - [Device bootstrap](docs/device-bootstrap.md)
 - [Realtime protocol](docs/protocol.md)
 - [Deployment](docs/deployment.md)
+- [oMLX setup](docs/omlx.md)
 - [LocalAI setup](docs/localai.md)
 - [Release process](docs/release.md)
 - [Client integration skill](skills/agensense-client/SKILL.md)

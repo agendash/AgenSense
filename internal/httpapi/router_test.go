@@ -108,6 +108,21 @@ func (fakeInference) ChatStream(_ context.Context, _ string, _ service.ChatInfer
 	}, nil
 }
 
+func (fakeInference) CompleteMultimodal(context.Context, string, service.MultimodalInferenceRequest) (service.MultimodalInferenceResponse, error) {
+	return service.MultimodalInferenceResponse{
+		ProviderProfileID: "mock-default",
+		Text:              "mock multimodal reply",
+	}, nil
+}
+
+func (fakeInference) AnalyzeVision(context.Context, string, service.VisionInferenceRequest) (service.VisionInferenceResponse, error) {
+	return service.VisionInferenceResponse{
+		ProviderProfileID: "mock-default",
+		Text:              "mock vision reply",
+		ImageCount:        1,
+	}, nil
+}
+
 func (fakeInference) Synthesize(context.Context, string, service.TTSInferenceRequest) (service.TTSInferenceResponse, error) {
 	return service.TTSInferenceResponse{
 		ProviderProfileID: "mock-default",
@@ -225,6 +240,44 @@ func TestDirectLLMStreamRoute(t *testing.T) {
 	}
 	if !bytes.Contains(body, []byte("event: done")) || !bytes.Contains(body, []byte(`"text":"mock reply"`)) {
 		t.Fatalf("missing done event: %s", body)
+	}
+}
+
+func TestDirectMultimodalRoute(t *testing.T) {
+	t.Parallel()
+
+	handler := NewRouter(fakeControl{}, fakeRegistry{}, fakeInference{}, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/v1/multimodal/chat", bytes.NewBufferString(`{"provider_profile_id":"mock-default","messages":[{"role":"user","content":[{"type":"text","text":"what is this"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AQID"}}]}]}`))
+	req.Header.Set("Authorization", "Bearer test-api-key")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body, _ := io.ReadAll(rec.Body)
+	if !bytes.Contains(body, []byte(`"text":"mock multimodal reply"`)) {
+		t.Fatalf("unexpected body: %s", body)
+	}
+}
+
+func TestDirectVisionRoute(t *testing.T) {
+	t.Parallel()
+
+	handler := NewRouter(fakeControl{}, fakeRegistry{}, fakeInference{}, nil, nil, nil)
+	req := httptest.NewRequest(http.MethodPost, "/v1/vision/analyze", bytes.NewBufferString(`{"provider_profile_id":"mock-default","prompt":"what is this","images":[{"image_base64":"AQID","mime_type":"image/png"}]}`))
+	req.Header.Set("Authorization", "Bearer test-api-key")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body, _ := io.ReadAll(rec.Body)
+	if !bytes.Contains(body, []byte(`"text":"mock vision reply"`)) || !bytes.Contains(body, []byte(`"image_count":1`)) {
+		t.Fatalf("unexpected body: %s", body)
 	}
 }
 

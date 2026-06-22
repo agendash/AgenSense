@@ -24,8 +24,8 @@ type TranscribeResponse struct {
 
 // ChatMessage is the provider-agnostic chat message shape.
 type ChatMessage struct {
-	Role    string
-	Content string
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
 // ChatRequest is the provider-agnostic LLM input.
@@ -37,6 +37,34 @@ type ChatRequest struct {
 
 // ChatDelta is one streamed text chunk emitted by an LLM provider.
 type ChatDelta struct {
+	Text string
+}
+
+// MultimodalContent is one provider-agnostic multimodal content part.
+type MultimodalContent struct {
+	Type     string
+	Text     string
+	ImageURL string
+	Data     []byte
+	MIMEType string
+	Name     string
+}
+
+// MultimodalMessage is a chat-style message with text and image content parts.
+type MultimodalMessage struct {
+	Role    string
+	Content []MultimodalContent
+}
+
+// MultimodalRequest is the provider-agnostic multimodal generation input.
+type MultimodalRequest struct {
+	DeviceID  string
+	SessionID string
+	Messages  []MultimodalMessage
+}
+
+// MultimodalResponse is the provider-agnostic multimodal generation output.
+type MultimodalResponse struct {
 	Text string
 }
 
@@ -62,6 +90,11 @@ type ASRClient interface {
 // LLMClient streams text deltas for chat output.
 type LLMClient interface {
 	ChatStream(ctx context.Context, req ChatRequest, cb func(ChatDelta) error) error
+}
+
+// MultimodalClient completes chat-style requests that include images.
+type MultimodalClient interface {
+	Complete(ctx context.Context, req MultimodalRequest) (MultimodalResponse, error)
 }
 
 // TTSClient streams synthesized audio chunks.

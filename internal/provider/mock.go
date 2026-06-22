@@ -86,6 +86,44 @@ func (MockLLM) ChatStream(ctx context.Context, req ChatRequest, cb func(ChatDelt
 	return nil
 }
 
+// MockMultimodal produces a stable text reply from text/image content parts.
+type MockMultimodal struct{}
+
+// Complete implements MultimodalClient.
+func (MockMultimodal) Complete(_ context.Context, req MultimodalRequest) (MultimodalResponse, error) {
+	textParts := 0
+	imageParts := 0
+	var lastText string
+	for _, message := range req.Messages {
+		for _, part := range message.Content {
+			if strings.TrimSpace(part.Text) != "" {
+				textParts++
+				lastText = strings.TrimSpace(part.Text)
+			}
+			if strings.TrimSpace(part.ImageURL) != "" || len(part.Data) > 0 {
+				imageParts++
+			}
+		}
+	}
+	if textParts == 0 && imageParts == 0 {
+		return MultimodalResponse{}, errors.New("mock multimodal: empty content")
+	}
+	reply := fmt.Sprintf(
+		"Mock multimodal reply: analyzed %d image(s) with %d text part(s). Last prompt: %q.",
+		imageParts,
+		textParts,
+		lastText,
+	)
+	slog.Debug("mock multimodal response prepared",
+		"device_id", req.DeviceID,
+		"session_id", req.SessionID,
+		"image_parts", imageParts,
+		"text_parts", textParts,
+		"reply_chars", len(reply),
+	)
+	return MultimodalResponse{Text: reply}, nil
+}
+
 // MockTTS synthesizes a deterministic sine-wave PCM stream.
 type MockTTS struct{}
 

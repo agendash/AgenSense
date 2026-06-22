@@ -8,37 +8,42 @@ import (
 
 // ProviderProfileRequest is the user-facing provider profile payload.
 type ProviderProfileRequest struct {
-	ID         string `json:"id"`
-	Name       string `json:"name,omitempty"`
-	ASRBaseURL string `json:"asr_base_url,omitempty"`
-	ASRAPIKey  string `json:"asr_api_key,omitempty"`
-	ASRModel   string `json:"asr_model,omitempty"`
-	LLMBaseURL string `json:"llm_base_url,omitempty"`
-	LLMAPIKey  string `json:"llm_api_key,omitempty"`
-	LLMModel   string `json:"llm_model,omitempty"`
-	TTSBaseURL string `json:"tts_base_url,omitempty"`
-	TTSAPIKey  string `json:"tts_api_key,omitempty"`
-	TTSModel   string `json:"tts_model,omitempty"`
-	VADBaseURL string `json:"vad_base_url,omitempty"`
-	VADAPIKey  string `json:"vad_api_key,omitempty"`
-	VADModel   string `json:"vad_model,omitempty"`
-	Default    bool   `json:"default,omitempty"`
+	ID                string `json:"id"`
+	Name              string `json:"name,omitempty"`
+	ASRBaseURL        string `json:"asr_base_url,omitempty"`
+	ASRAPIKey         string `json:"asr_api_key,omitempty"`
+	ASRModel          string `json:"asr_model,omitempty"`
+	LLMBaseURL        string `json:"llm_base_url,omitempty"`
+	LLMAPIKey         string `json:"llm_api_key,omitempty"`
+	LLMModel          string `json:"llm_model,omitempty"`
+	MultimodalBaseURL string `json:"multimodal_base_url,omitempty"`
+	MultimodalAPIKey  string `json:"multimodal_api_key,omitempty"`
+	MultimodalModel   string `json:"multimodal_model,omitempty"`
+	TTSBaseURL        string `json:"tts_base_url,omitempty"`
+	TTSAPIKey         string `json:"tts_api_key,omitempty"`
+	TTSModel          string `json:"tts_model,omitempty"`
+	VADBaseURL        string `json:"vad_base_url,omitempty"`
+	VADAPIKey         string `json:"vad_api_key,omitempty"`
+	VADModel          string `json:"vad_model,omitempty"`
+	Default           bool   `json:"default,omitempty"`
 }
 
 // ProviderProfileResponse is the stored provider profile returned to clients.
 type ProviderProfileResponse struct {
-	ID         string `json:"id"`
-	Name       string `json:"name,omitempty"`
-	Namespace  string `json:"namespace"`
-	ASRBaseURL string `json:"asr_base_url,omitempty"`
-	ASRModel   string `json:"asr_model,omitempty"`
-	LLMBaseURL string `json:"llm_base_url,omitempty"`
-	LLMModel   string `json:"llm_model,omitempty"`
-	TTSBaseURL string `json:"tts_base_url,omitempty"`
-	TTSModel   string `json:"tts_model,omitempty"`
-	VADBaseURL string `json:"vad_base_url,omitempty"`
-	VADModel   string `json:"vad_model,omitempty"`
-	Default    bool   `json:"default,omitempty"`
+	ID                string `json:"id"`
+	Name              string `json:"name,omitempty"`
+	Namespace         string `json:"namespace"`
+	ASRBaseURL        string `json:"asr_base_url,omitempty"`
+	ASRModel          string `json:"asr_model,omitempty"`
+	LLMBaseURL        string `json:"llm_base_url,omitempty"`
+	LLMModel          string `json:"llm_model,omitempty"`
+	MultimodalBaseURL string `json:"multimodal_base_url,omitempty"`
+	MultimodalModel   string `json:"multimodal_model,omitempty"`
+	TTSBaseURL        string `json:"tts_base_url,omitempty"`
+	TTSModel          string `json:"tts_model,omitempty"`
+	VADBaseURL        string `json:"vad_base_url,omitempty"`
+	VADModel          string `json:"vad_model,omitempty"`
+	Default           bool   `json:"default,omitempty"`
 }
 
 type AudioFormatInput struct {
@@ -144,6 +149,79 @@ type ChatInferenceResponse struct {
 
 type ChatDeltaCallback func(delta string) error
 
+type ImageURLInput struct {
+	URL string `json:"url,omitempty"`
+}
+
+type MultimodalContentInput struct {
+	Type        string         `json:"type,omitempty"`
+	Text        string         `json:"text,omitempty"`
+	ImageURL    *ImageURLInput `json:"image_url,omitempty"`
+	URL         string         `json:"url,omitempty"`
+	ImageBase64 string         `json:"image_base64,omitempty"`
+	MIMEType    string         `json:"mime_type,omitempty"`
+	Name        string         `json:"name,omitempty"`
+}
+
+type MultimodalMessageInput struct {
+	Role    string                   `json:"role,omitempty"`
+	Content []MultimodalContentInput `json:"content"`
+}
+
+// MultimodalInferenceRequest runs one text+image generation request.
+type MultimodalInferenceRequest struct {
+	ProviderProfileID string                   `json:"provider_profile_id,omitempty"`
+	ClientID          string                   `json:"client_id,omitempty"`
+	DeviceLabel       string                   `json:"device_label,omitempty"`
+	HardwareSKU       string                   `json:"hardware_sku,omitempty"`
+	FirmwareVersion   string                   `json:"firmware_version,omitempty"`
+	FirmwareChannel   string                   `json:"firmware_channel,omitempty"`
+	SessionID         string                   `json:"session_id,omitempty"`
+	Messages          []MultimodalMessageInput `json:"messages"`
+	VoiceAssistant    VoiceAssistantMetadata   `json:"voice_assistant,omitempty"`
+	UIContext         map[string]any           `json:"ui_context,omitempty"`
+	AssistantIntent   *VoiceAssistantIntent    `json:"assistant_intent,omitempty"`
+	Metadata          map[string]any           `json:"metadata,omitempty"`
+}
+
+type MultimodalInferenceResponse struct {
+	ProviderProfileID string                `json:"provider_profile_id"`
+	Text              string                `json:"text"`
+	AssistantIntent   *VoiceAssistantIntent `json:"assistant_intent,omitempty"`
+}
+
+type VisionImageInput struct {
+	ImageBase64 string `json:"image_base64,omitempty"`
+	ImageURL    string `json:"image_url,omitempty"`
+	URL         string `json:"url,omitempty"`
+	MIMEType    string `json:"mime_type,omitempty"`
+	Name        string `json:"name,omitempty"`
+}
+
+// VisionInferenceRequest is a convenience wrapper over the multimodal provider.
+type VisionInferenceRequest struct {
+	ProviderProfileID string                 `json:"provider_profile_id,omitempty"`
+	ClientID          string                 `json:"client_id,omitempty"`
+	DeviceLabel       string                 `json:"device_label,omitempty"`
+	HardwareSKU       string                 `json:"hardware_sku,omitempty"`
+	FirmwareVersion   string                 `json:"firmware_version,omitempty"`
+	FirmwareChannel   string                 `json:"firmware_channel,omitempty"`
+	SessionID         string                 `json:"session_id,omitempty"`
+	Prompt            string                 `json:"prompt,omitempty"`
+	Images            []VisionImageInput     `json:"images"`
+	VoiceAssistant    VoiceAssistantMetadata `json:"voice_assistant,omitempty"`
+	UIContext         map[string]any         `json:"ui_context,omitempty"`
+	AssistantIntent   *VoiceAssistantIntent  `json:"assistant_intent,omitempty"`
+	Metadata          map[string]any         `json:"metadata,omitempty"`
+}
+
+type VisionInferenceResponse struct {
+	ProviderProfileID string                `json:"provider_profile_id"`
+	Text              string                `json:"text"`
+	ImageCount        int                   `json:"image_count"`
+	AssistantIntent   *VoiceAssistantIntent `json:"assistant_intent,omitempty"`
+}
+
 // TTSInferenceRequest runs one text-to-speech request.
 type TTSInferenceRequest struct {
 	ProviderProfileID string           `json:"provider_profile_id,omitempty"`
@@ -176,5 +254,7 @@ type InferenceService interface {
 	Transcribe(ctx context.Context, apiKey string, req ASRInferenceRequest) (ASRInferenceResponse, error)
 	Chat(ctx context.Context, apiKey string, req ChatInferenceRequest) (ChatInferenceResponse, error)
 	ChatStream(ctx context.Context, apiKey string, req ChatInferenceRequest, cb ChatDeltaCallback) (ChatInferenceResponse, error)
+	CompleteMultimodal(ctx context.Context, apiKey string, req MultimodalInferenceRequest) (MultimodalInferenceResponse, error)
+	AnalyzeVision(ctx context.Context, apiKey string, req VisionInferenceRequest) (VisionInferenceResponse, error)
 	Synthesize(ctx context.Context, apiKey string, req TTSInferenceRequest) (TTSInferenceResponse, error)
 }

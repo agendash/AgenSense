@@ -9,7 +9,7 @@ import (
 const (
 	DemoTenantID        = "home-lab"
 	DemoInstanceID      = "cn-shanghai-main"
-	DemoProviderID      = "default"
+	DemoProviderID      = "omlx-local"
 	DemoDeviceID        = "vdk-coreS3-001"
 	DemoClaimToken      = "factory-claim-token"
 	DemoGatewayWSURL    = "ws://127.0.0.1:8080/v1/session/ws"
@@ -17,12 +17,14 @@ const (
 	DemoConfigVersion   = int64(1)
 	DemoFirmwareSKU     = "m5cores3-facekit-audio"
 	DemoFirmwareChipID  = "esp32s3-abcdef"
-	DemoProviderName    = "LocalAI Default"
-	DemoProviderBaseURL = "http://127.0.0.1:8081/v1"
+	DemoProviderName    = "oMLX Local Voice Stack"
+	DemoProviderBaseURL = "http://127.0.0.1:8000/v1"
 	DemoProviderAPIKey  = ""
-	DemoASRModel        = "whisper-1"
-	DemoLLMModel        = "gemma-4-e2b-it"
-	DemoTTSModel        = "tts-1"
+	DemoASRModel        = "nemotron-3.5-asr-streaming-0.6b-8bit"
+	DemoLLMModel        = "gemma-4-E4B-it-MLX-4bit"
+	DemoMultimodalModel = "Qwen3.6-27B-MLX-4bit"
+	DemoTTSModel        = "Qwen3-TTS-12Hz-0.6B-Base-8bit"
+	DemoVADModel        = "silero-vad-v6"
 )
 
 type DemoSeed struct {
@@ -97,20 +99,26 @@ func BuildDemoSeed(now time.Time) DemoSeed {
 			UpdatedAt:             now,
 		},
 		ProviderProfile: ProviderProfile{
-			ID:         DemoProviderID,
-			TenantID:   DemoTenantID,
-			Name:       DemoProviderName,
-			ASRBaseURL: DemoProviderBaseURL,
-			ASRAPIKey:  DemoProviderAPIKey,
-			ASRModel:   DemoASRModel,
-			LLMBaseURL: DemoProviderBaseURL,
-			LLMAPIKey:  DemoProviderAPIKey,
-			LLMModel:   DemoLLMModel,
-			TTSBaseURL: DemoProviderBaseURL,
-			TTSAPIKey:  DemoProviderAPIKey,
-			TTSModel:   DemoTTSModel,
-			CreatedAt:  now,
-			UpdatedAt:  now,
+			ID:                DemoProviderID,
+			TenantID:          DemoTenantID,
+			Name:              DemoProviderName,
+			ASRBaseURL:        DemoProviderBaseURL,
+			ASRAPIKey:         DemoProviderAPIKey,
+			ASRModel:          DemoASRModel,
+			LLMBaseURL:        DemoProviderBaseURL,
+			LLMAPIKey:         DemoProviderAPIKey,
+			LLMModel:          DemoLLMModel,
+			MultimodalBaseURL: DemoProviderBaseURL,
+			MultimodalAPIKey:  DemoProviderAPIKey,
+			MultimodalModel:   DemoMultimodalModel,
+			TTSBaseURL:        DemoProviderBaseURL,
+			TTSAPIKey:         DemoProviderAPIKey,
+			TTSModel:          DemoTTSModel,
+			VADBaseURL:        DemoProviderBaseURL,
+			VADAPIKey:         DemoProviderAPIKey,
+			VADModel:          DemoVADModel,
+			CreatedAt:         now,
+			UpdatedAt:         now,
 		},
 		ConfigSnapshot: ConfigSnapshot{
 			DeviceID:          DemoDeviceID,

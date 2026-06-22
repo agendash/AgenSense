@@ -8,6 +8,17 @@ import (
 	"strings"
 )
 
+const (
+	defaultOMLXProviderID      = "omlx-local"
+	defaultOMLXProviderName    = "oMLX Local Voice Stack"
+	defaultOMLXProviderBaseURL = "http://127.0.0.1:8000/v1"
+	defaultOMLXASRModel        = "nemotron-3.5-asr-streaming-0.6b-8bit"
+	defaultOMLXLLMModel        = "gemma-4-E4B-it-MLX-4bit"
+	defaultOMLXMultimodalModel = "Qwen3.6-27B-MLX-4bit"
+	defaultOMLXTTSModel        = "Qwen3-TTS-12Hz-0.6B-Base-8bit"
+	defaultOMLXVADModel        = "silero-vad-v6"
+)
+
 // Config holds the local MVP runtime configuration.
 type Config struct {
 	Addr                   string
@@ -28,7 +39,9 @@ type Config struct {
 	DefaultProviderAPIKey  string
 	DefaultASRModel        string
 	DefaultLLMModel        string
+	DefaultMultimodalModel string
 	DefaultTTSModel        string
+	DefaultVADModel        string
 	RetryHintSec           int
 }
 
@@ -50,15 +63,17 @@ func LoadConfig() (Config, error) {
 		DemoClaimToken:         envOrDefault("AGENSENSE_DEMO_CLAIM_TOKEN", "demo-claim-token"),
 		DemoTenantID:           envOrDefault("AGENSENSE_DEMO_TENANT_ID", "local-tenant"),
 		DemoInstanceID:         envOrDefault("AGENSENSE_DEMO_INSTANCE_ID", "local-instance"),
-		DemoProviderProfileID:  envOrDefault("AGENSENSE_DEMO_PROVIDER_PROFILE_ID", "default"),
+		DemoProviderProfileID:  envOrDefault("AGENSENSE_DEMO_PROVIDER_PROFILE_ID", defaultOMLXProviderID),
 		DefaultAPIKey:          envOrDefault("AGENSENSE_DEFAULT_API_KEY", "demo-user-key"),
-		DefaultProviderID:      envOrDefault("AGENSENSE_DEFAULT_PROVIDER_ID", "default"),
-		DefaultProviderName:    envOrDefault("AGENSENSE_DEFAULT_PROVIDER_NAME", "LocalAI Default"),
-		DefaultProviderBaseURL: envOrDefault("AGENSENSE_DEFAULT_PROVIDER_BASE_URL", "http://127.0.0.1:8081/v1"),
+		DefaultProviderID:      envOrDefault("AGENSENSE_DEFAULT_PROVIDER_ID", defaultOMLXProviderID),
+		DefaultProviderName:    envOrDefault("AGENSENSE_DEFAULT_PROVIDER_NAME", defaultOMLXProviderName),
+		DefaultProviderBaseURL: envOrDefault("AGENSENSE_DEFAULT_PROVIDER_BASE_URL", defaultOMLXProviderBaseURL),
 		DefaultProviderAPIKey:  envOrDefault("AGENSENSE_DEFAULT_PROVIDER_API_KEY", ""),
-		DefaultASRModel:        envOrDefault("AGENSENSE_DEFAULT_ASR_MODEL", "whisper-1"),
-		DefaultLLMModel:        envOrDefault("AGENSENSE_DEFAULT_LLM_MODEL", "hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m"),
-		DefaultTTSModel:        envOrDefault("AGENSENSE_DEFAULT_TTS_MODEL", "faster-qwen3-tts"),
+		DefaultASRModel:        envOrDefault("AGENSENSE_DEFAULT_ASR_MODEL", defaultOMLXASRModel),
+		DefaultLLMModel:        envOrDefault("AGENSENSE_DEFAULT_LLM_MODEL", defaultOMLXLLMModel),
+		DefaultMultimodalModel: envOrDefault("AGENSENSE_DEFAULT_MULTIMODAL_MODEL", defaultOMLXMultimodalModel),
+		DefaultTTSModel:        envOrDefault("AGENSENSE_DEFAULT_TTS_MODEL", defaultOMLXTTSModel),
+		DefaultVADModel:        envOrDefault("AGENSENSE_DEFAULT_VAD_MODEL", defaultOMLXVADModel),
 		RetryHintSec:           envOrDefaultInt("AGENSENSE_RETRY_HINT_SEC", 30),
 	}
 

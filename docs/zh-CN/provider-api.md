@@ -1,6 +1,6 @@
 # Provider API
 
-这份文档描述 AgenSense 第一版里的 API key 模式：如何注册 provider profile，如何在后续请求中直接复用这些配置。
+这份文档描述 AgenSense 第一版里的 API key 模式：如何注册 provider profile，如何在后续请求中直接复用这些配置调用 ASR / LLM / multimodal vision / TTS。
 
 ## 目标
 
@@ -30,6 +30,9 @@ Authorization: Bearer <AGENSENSE_API_KEY>
 - `llm_base_url`
 - `llm_api_key`
 - `llm_model`
+- `multimodal_base_url`
+- `multimodal_api_key`
+- `multimodal_model`
 - `tts_base_url`
 - `tts_api_key`
 - `tts_model`
@@ -56,6 +59,9 @@ Authorization: Bearer <AGENSENSE_API_KEY>
   "llm_base_url": "http://127.0.0.1:8081/v1",
   "llm_api_key": "******",
   "llm_model": "hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m",
+  "multimodal_base_url": "http://127.0.0.1:8081/v1",
+  "multimodal_api_key": "******",
+  "multimodal_model": "hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m",
   "tts_base_url": "http://127.0.0.1:8081/v1",
   "tts_api_key": "******",
   "tts_model": "faster-qwen3-tts",
@@ -175,6 +181,60 @@ data: {"provider_profile_id":"default","text":"full text","deltas":["partial tex
 
 流式文本和 tool-use metadata 可以同时使用。当前 AgenSense 会流式转发模型文本，并把 Universal Voice Layer / MCP metadata 保存到 trace；真正执行工具、回填 tool result、再续写回答的闭环，仍应由客户端或后续工具运行时承接。
 
+### `POST /v1/multimodal/chat`
+
+这是通用 multimodal provider 接口，不绑定 Joyce。请求体示例：
+
+```json
+{
+  "provider_profile_id": "default",
+  "client_id": "agendash-desktop",
+  "session_id": "vision-001",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "这是什么？"},
+        {
+          "type": "image_url",
+          "image_url": {
+            "url": "data:image/png;base64,iVBORw0KGgo..."
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+响应体示例：
+
+```json
+{
+  "provider_profile_id": "default",
+  "text": "..."
+}
+```
+
+### `POST /v1/vision/analyze`
+
+这是图片分析的便利接口，底层仍走同一套 multimodal provider。请求体示例：
+
+```json
+{
+  "provider_profile_id": "default",
+  "prompt": "描述这张 UI 截图，并指出视觉问题。",
+  "images": [
+    {
+      "image_base64": "iVBORw0KGgo...",
+      "mime_type": "image/png"
+    }
+  ]
+}
+```
+
+如果 provider profile 没有填写 `multimodal_*` 字段，AgenSense 会回退使用同 profile 的 LLM base URL、API key 和 model。内置默认 profile 的 multimodal model 也默认继承 `AGENSENSE_DEFAULT_LLM_MODEL`；只有显式设置 `AGENSENSE_DEFAULT_MULTIMODAL_MODEL` 时才会分开。
+
 ### `POST /v1/tts/synthesize`
 
 请求体示例：
@@ -231,6 +291,7 @@ data: {"provider_profile_id":"default","text":"full text","deltas":["partial tex
 
 - ASR：调用 `/audio/transcriptions`
 - LLM：调用 `/chat/completions` 的流式输出
+- Multimodal：调用 `/chat/completions`，使用 OpenAI 风格的 `text` / `image_url` content parts
 - TTS：调用 `/audio/speech`
 
 推荐的 LocalAI `faster-qwen3-tts` 验证链路可以设置 `AGENSENSE_OPENAI_TTS_VOICE=Serena`。voice 支持取决于具体后端；如果后端拒绝 voice 字段，可以设置 `AGENSENSE_OPENAI_TTS_VOICE=none`。部分 LocalAI TTS 即使请求 PCM 也会返回 WAV 容器；AgenSense 会把 16-bit WAV 拆成 `pcm_s16le`，并回传真实采样率和声道数。

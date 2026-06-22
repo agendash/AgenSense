@@ -6,20 +6,21 @@ import (
 )
 
 const (
-	EventHello          = "hello"
-	EventHelloOK        = "hello.ok"
-	EventTelemetry      = "telemetry.update"
-	EventAudioStart     = "audio.start"
-	EventAudioStop      = "audio.stop"
-	EventConfigSnapshot = "config.snapshot"
-	EventConfigAck      = "config.ack"
-	EventASRFinal       = "asr.final"
-	EventLLMDelta       = "llm.delta"
-	EventLLMDone        = "llm.done"
-	EventTTSStart       = "tts.start"
-	EventTTSStop        = "tts.stop"
-	EventActionExecute  = "action.execute"
-	EventError          = "error"
+	EventHello           = "hello"
+	EventHelloOK         = "hello.ok"
+	EventTelemetry       = "telemetry.update"
+	EventAudioStart      = "audio.start"
+	EventAudioStop       = "audio.stop"
+	EventConfigSnapshot  = "config.snapshot"
+	EventConfigAck       = "config.ack"
+	EventASRFinal        = "asr.final"
+	EventLLMDelta        = "llm.delta"
+	EventLLMDone         = "llm.done"
+	EventMCPCallProposed = "mcp.call.proposed"
+	EventTTSStart        = "tts.start"
+	EventTTSStop         = "tts.stop"
+	EventActionExecute   = "action.execute"
+	EventError           = "error"
 )
 
 // HelloPayload is the client hello payload.
@@ -88,6 +89,18 @@ type LLMDonePayload struct {
 	Text string `json:"text"`
 }
 
+// MCPCallProposedPayload carries one proposed MCP tool call for a client or
+// gateway to confirm, execute, or ignore. AgenSense does not execute MCP calls.
+type MCPCallProposedPayload struct {
+	ProposalID           string         `json:"proposal_id"`
+	ToolName             string         `json:"tool_name"`
+	Arguments            map[string]any `json:"arguments,omitempty"`
+	Transcript           string         `json:"transcript,omitempty"`
+	Confidence           float64        `json:"confidence,omitempty"`
+	RequiresConfirmation bool           `json:"requires_confirmation,omitempty"`
+	Reason               string         `json:"reason,omitempty"`
+}
+
 // ErrorPayload is the canonical error shape.
 type ErrorPayload struct {
 	Code    string `json:"code"`
@@ -131,6 +144,8 @@ func validateEnvelope(event Envelope) error {
 		return validatePayload[LLMDeltaPayload](event)
 	case EventLLMDone:
 		return validatePayload[LLMDonePayload](event)
+	case EventMCPCallProposed:
+		return validatePayload[MCPCallProposedPayload](event)
 	case EventActionExecute:
 		return validatePayload[ActionExecutePayload](event)
 	case EventError:
@@ -204,6 +219,13 @@ func validateTypedPayload(eventType string, payload any) error {
 	case LLMDonePayload:
 		if value.Text == "" {
 			return fmt.Errorf("%w: llm.done.payload.text is required", ErrInvalidPayload)
+		}
+	case MCPCallProposedPayload:
+		if value.ProposalID == "" || value.ToolName == "" {
+			return fmt.Errorf("%w: mcp.call.proposed.payload proposal_id and tool_name are required", ErrInvalidPayload)
+		}
+		if value.Confidence < 0 || value.Confidence > 1 {
+			return fmt.Errorf("%w: mcp.call.proposed.payload confidence must be between 0 and 1", ErrInvalidPayload)
 		}
 	case ErrorPayload:
 		if value.Code == "" || value.Message == "" {

@@ -74,6 +74,12 @@ func TestVoiceWebSocketRoundTrip(t *testing.T) {
 				"requires_confirmation": false,
 				"ui_surface":            "toast",
 			},
+			"metadata": map[string]any{
+				"available_mcp_tools": []any{
+					"joyce.capture_text",
+					"joyce.create_reminder_candidate",
+				},
+			},
 		},
 		"format": map[string]any{
 			"codec":          "pcm_s16le",
@@ -138,7 +144,8 @@ func TestVoiceWebSocketRoundTrip(t *testing.T) {
 
 	seen := map[string]bool{}
 	binaryFrames := 0
-	for !(seen[protocol.EventLLMDone] && seen[protocol.EventTTSStart] && seen[protocol.EventTTSStop] && seen[eventResponseDone] && binaryFrames > 0) {
+	var mcpProposal protocol.MCPCallProposedPayload
+	for !(seen[protocol.EventMCPCallProposed] && seen[protocol.EventLLMDone] && seen[protocol.EventTTSStart] && seen[protocol.EventTTSStop] && seen[eventResponseDone] && binaryFrames > 0) {
 		opcode, payload := readServerFrame(t, reader)
 		switch opcode {
 		case 0x1:
@@ -147,11 +154,25 @@ func TestVoiceWebSocketRoundTrip(t *testing.T) {
 				t.Fatalf("DecodeEvent(server) error = %v", err)
 			}
 			seen[event.Type] = true
+			if event.Type == protocol.EventMCPCallProposed {
+				if err := event.DecodePayload(&mcpProposal); err != nil {
+					t.Fatalf("DecodePayload(mcp.call.proposed) error = %v", err)
+				}
+			}
 		case 0x2:
 			binaryFrames++
 		default:
 			t.Fatalf("unexpected opcode %d", opcode)
 		}
+	}
+	if mcpProposal.ProposalID == "" {
+		t.Fatal("expected mcp.call.proposed proposal id")
+	}
+	if mcpProposal.ToolName != "joyce.capture_text" {
+		t.Fatalf("mcp tool = %q, want joyce.capture_text", mcpProposal.ToolName)
+	}
+	if mcpProposal.Arguments["raw_text"] == "" {
+		t.Fatalf("expected raw_text argument in mcp proposal: %#v", mcpProposal.Arguments)
 	}
 
 	traces := debugStore.List()
