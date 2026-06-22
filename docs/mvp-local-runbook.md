@@ -41,9 +41,9 @@ Default runtime:
 - listen address: `127.0.0.1:8080`
 - data directory: `tmp/agensense`
 - default API key: `demo-user-key`
-- default provider profile: `default`
-- default provider base URL: `http://127.0.0.1:8081/v1`
-- default models: `whisper-1`, `hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m`, `faster-qwen3-tts`
+- default provider profile: `omlx-local`
+- default provider base URL: `http://127.0.0.1:8000/v1`
+- default models: `nemotron-3.5-asr-streaming-0.6b-8bit`, `gemma-4-E4B-it-MLX-4bit`, `Qwen3-TTS-12Hz-0.6B-Base-8bit`
 
 ## Health Check
 
@@ -73,28 +73,31 @@ curl -sS \
   -H "Authorization: Bearer ${AGENSENSE_API_KEY}"
 ```
 
-The default profile expects LocalAI on host port `8081`. If you use a different OpenAI-compatible provider, register or override the profile:
+The default profile expects oMLX on host port `8000`. If you use a different OpenAI-compatible provider, register or override the profile:
 
 ```sh
-export PROVIDER_BASE_URL="http://127.0.0.1:8081/v1"
-export PROVIDER_API_KEY="replace-me"
+export PROVIDER_BASE_URL="http://127.0.0.1:8000/v1"
+export PROVIDER_API_KEY=""
 
 curl -sS \
   -X POST http://127.0.0.1:8080/v1/providers \
   -H "Authorization: Bearer ${AGENSENSE_API_KEY}" \
   -H 'content-type: application/json' \
   -d '{
-    "id":"default",
-    "name":"OpenAI Compatible Default",
+    "id":"omlx-local",
+    "name":"oMLX Local Voice Stack",
     "asr_base_url":"'"${PROVIDER_BASE_URL}"'",
     "asr_api_key":"'"${PROVIDER_API_KEY}"'",
-    "asr_model":"whisper-1",
+    "asr_model":"nemotron-3.5-asr-streaming-0.6b-8bit",
     "llm_base_url":"'"${PROVIDER_BASE_URL}"'",
     "llm_api_key":"'"${PROVIDER_API_KEY}"'",
-    "llm_model":"hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m",
+    "llm_model":"gemma-4-E4B-it-MLX-4bit",
     "tts_base_url":"'"${PROVIDER_BASE_URL}"'",
     "tts_api_key":"'"${PROVIDER_API_KEY}"'",
-    "tts_model":"faster-qwen3-tts",
+    "tts_model":"Qwen3-TTS-12Hz-0.6B-Base-8bit",
+    "vad_base_url":"'"${PROVIDER_BASE_URL}"'",
+    "vad_api_key":"'"${PROVIDER_API_KEY}"'",
+    "vad_model":"silero-vad-v6",
     "default":true
   }'
 ```
@@ -120,7 +123,7 @@ Expected fields:
 - `text`
 - `deltas`
 
-If LocalAI is not running yet, start with [LocalAI setup](localai.md) or temporarily register a mock provider:
+If oMLX is not running yet, start with [oMLX setup](omlx.md) or temporarily register a mock provider:
 
 ```sh
 curl -sS \
@@ -247,7 +250,7 @@ Use the current default provider instead of the mock smoke profile:
 ```sh
 go run ./cmd/agensense-smoke \
   -ensure-mock-provider=false \
-  -provider-profile-id=default \
+  -provider-profile-id=omlx-local \
   -timeout=90s
 ```
 

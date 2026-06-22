@@ -19,7 +19,8 @@ go build -o bin/agensense ./cmd/agensense
 AGENSENSE_ADDR=:8080 \
 AGENSENSE_PUBLIC_BASE_URL=http://127.0.0.1:8080 \
 AGENSENSE_DATA_DIR=tmp/agensense \
-AGENSENSE_DEFAULT_PROVIDER_BASE_URL=http://127.0.0.1:8081/v1 \
+AGENSENSE_DEFAULT_PROVIDER_BASE_URL=http://127.0.0.1:8000/v1 \
+AGENSENSE_OPENAI_TTS_VOICE=none \
 ./bin/agensense
 ```
 
@@ -54,6 +55,24 @@ Remove the local data volume:
 ```sh
 docker compose down -v
 ```
+
+## Docker Compose With Host oMLX
+
+Start AgenSense in Compose and route providers to the oMLX service running on the Mac host:
+
+```sh
+docker compose -f compose.yaml -f compose.omlx.yaml up --build
+```
+
+Or:
+
+```sh
+./scripts/omlx-up.sh
+```
+
+When running inside Compose, AgenSense uses `http://host.docker.internal:8000/v1` for oMLX. From the host, the AgenSense API remains exposed at `http://127.0.0.1:8080`.
+
+See [oMLX setup](omlx.md) for model and API-key details.
 
 ## Docker Compose With LocalAI
 
@@ -95,7 +114,8 @@ docker run --rm \
   -e AGENSENSE_ADDR=:8080 \
   -e AGENSENSE_PUBLIC_BASE_URL=http://127.0.0.1:8080 \
   -e AGENSENSE_DATA_DIR=/data \
-  -e AGENSENSE_DEFAULT_PROVIDER_BASE_URL=http://host.docker.internal:8081/v1 \
+  -e AGENSENSE_DEFAULT_PROVIDER_BASE_URL=http://host.docker.internal:8000/v1 \
+  -e AGENSENSE_OPENAI_TTS_VOICE=none \
   --add-host host.docker.internal:host-gateway \
   -v agensense-data:/data \
   agendash/agensense:local
@@ -108,6 +128,7 @@ The scripts under `scripts/` are intentionally small wrappers:
 - `scripts/run-local.sh`: run the service with local defaults
 - `scripts/smoke-local.sh`: run the voice smoke test against a local service
 - `scripts/docker-local.sh`: run `docker compose up --build`
+- `scripts/omlx-up.sh`: run AgenSense in Compose against host oMLX
 - `scripts/localai-up.sh`: run AgenSense and LocalAI together
 
 They are source-controlled because they document the expected local workflow and reduce command drift.

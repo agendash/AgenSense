@@ -12,15 +12,18 @@ Authorization: Bearer <AGENSENSE_API_KEY>
 
 The API key maps to a stable internal namespace. The raw API key is not stored.
 
-By default, AgenSense seeds the `demo-user-key` namespace with a LocalAI-oriented default provider:
+By default, AgenSense seeds the `demo-user-key` namespace with a local oMLX default provider:
 
-- base URL: `http://127.0.0.1:8081/v1`
-- ASR model: `whisper-1`
-- LLM model: `hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m`
-- Multimodal model: inherits the LLM model by default
-- TTS model: `faster-qwen3-tts`
+- base URL: `http://127.0.0.1:8000/v1`
+- ASR model: `nemotron-3.5-asr-streaming-0.6b-8bit`
+- LLM model: `gemma-4-E4B-it-MLX-4bit`
+- Multimodal model: `Qwen3.6-27B-MLX-4bit`
+- TTS model: `Qwen3-TTS-12Hz-0.6B-Base-8bit`
+- VAD model: `silero-vad-v6`
 
-See [LocalAI setup](localai.md) for the recommended local address layout.
+Current oMLX builds serve the ASR and TTS models through OpenAI-compatible audio endpoints. `silero-vad-v6` can be recorded in the profile, while the WebSocket voice path uses AgenSense's built-in level-based VAD before ASR.
+
+AgenSense can also target a local CPU TTS server for the TTS portion only. `cmd/agensense-tts-say` exposes `POST /v1/audio/speech` and can be registered as a profile's `tts_base_url` while ASR and LLM remain on oMLX.
 
 ## Provider Profiles
 
@@ -40,6 +43,7 @@ Supported fields:
 - `tts_model`
 - `vad_base_url`
 - `vad_api_key`
+- `vad_model`
 
 Provider credentials are currently persisted as plain text in the local JSON store. Treat the first implementation as local-dev or trusted single-node infrastructure.
 
@@ -49,20 +53,22 @@ Provider credentials are currently persisted as plain text in the local JSON sto
 
 ```json
 {
-  "id": "default",
-  "name": "OpenAI Compatible Default",
-  "asr_base_url": "http://127.0.0.1:8081/v1",
+  "id": "omlx-local",
+  "name": "oMLX Local Voice Stack",
+  "asr_base_url": "http://127.0.0.1:8000/v1",
   "asr_api_key": "******",
-  "asr_model": "whisper-1",
-  "llm_base_url": "http://127.0.0.1:8081/v1",
+  "asr_model": "nemotron-3.5-asr-streaming-0.6b-8bit",
+  "llm_base_url": "http://127.0.0.1:8000/v1",
   "llm_api_key": "******",
-  "llm_model": "hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m",
-  "multimodal_base_url": "http://127.0.0.1:8081/v1",
+  "llm_model": "gemma-4-E4B-it-MLX-4bit",
+  "multimodal_base_url": "http://127.0.0.1:8000/v1",
   "multimodal_api_key": "******",
-  "multimodal_model": "hauhaucs-qwen3.6-35b-a3b-aggressive-q4-k-m",
-  "tts_base_url": "http://127.0.0.1:8081/v1",
+  "multimodal_model": "Qwen3.6-27B-MLX-4bit",
+  "tts_base_url": "http://127.0.0.1:8000/v1",
   "tts_api_key": "******",
-  "tts_model": "faster-qwen3-tts",
+  "tts_model": "Qwen3-TTS-12Hz-0.6B-Base-8bit",
+  "vad_base_url": "http://127.0.0.1:8000/v1",
+  "vad_model": "silero-vad-v6",
   "default": true
 }
 ```
@@ -252,7 +258,7 @@ Response:
 
 Some OpenAI-compatible TTS services return a WAV container even when PCM is requested. AgenSense unwraps 16-bit PCM WAV responses into `pcm_s16le` frames and reports the actual sample rate and channel count.
 
-Set `AGENSENSE_OPENAI_TTS_VOICE=Serena` for the recommended LocalAI `faster-qwen3-tts` validation path. Voice support is provider-specific; set `AGENSENSE_OPENAI_TTS_VOICE=none` if your backend rejects the voice field. `AGENSENSE_OPENAI_TTS_SENTENCE_STREAM=1` enables sentence-level chunking for long responses, but the default keeps a single provider request for maximum TTS quality.
+Set `AGENSENSE_OPENAI_REASONING_EFFORT=none` to suppress thinking on compatible OpenAI-style LLM backends. Set `AGENSENSE_OPENAI_TTS_VOICE=Serena` for the recommended LocalAI `faster-qwen3-tts` validation path. Voice support is provider-specific; set `AGENSENSE_OPENAI_TTS_VOICE=none` if your backend rejects the voice field. `AGENSENSE_OPENAI_TTS_SENTENCE_STREAM=1` enables provider-side text chunking for long TTS responses; tune `AGENSENSE_OPENAI_TTS_SEGMENT_MAX_RUNES`, `AGENSENSE_REALTIME_TTS_MAX_RUNES`, and `AGENSENSE_REALTIME_TTS_SOFT_MIN_RUNES` lower when the upstream TTS model buffers each utterance before returning audio.
 
 ## Provider Selection
 

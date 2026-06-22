@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agendash/AgenSense/internal/provider"
 	"github.com/agendash/AgenSense/internal/service"
 )
 
@@ -86,17 +87,141 @@ func TestRecentSpeechPromptFramesEchoAndRawASR(t *testing.T) {
 
 	got := s.recentSpeechPrompt("好的，我会继续监听。帮我打开设置")
 	checks := []string{
-		"Assistant speech already played:",
+		"Recent assistant speech",
 		"好的，我会继续监听。",
-		"Raw latest ASR transcript:",
+		"Raw latest ASR",
 		"帮我打开设置",
-		"discard only the echoed portion",
-		"ask one short clarification",
+		"ignore the echo",
 	}
 	for _, check := range checks {
 		if !strings.Contains(got, check) {
 			t.Fatalf("recentSpeechPrompt missing %q in:\n%s", check, got)
 		}
+	}
+}
+
+func TestVoiceAssistantPromptOmitsSharedSystemPromptMetadata(t *testing.T) {
+	t.Parallel()
+
+	got := voiceAssistantPrompt(service.VoiceAssistantMetadata{
+		Contract: "universal_voice_layer_v1",
+		Metadata: map[string]any{
+			"shared_system_prompt": voiceReplySystemPrompt,
+			"mcp_tools":            []any{"capture_text"},
+		},
+	})
+	if strings.Contains(got, "shared_system_prompt") || strings.Contains(got, voiceReplySystemPrompt) {
+		t.Fatalf("voiceAssistantPrompt leaked shared system prompt:\n%s", got)
+	}
+	if !strings.Contains(got, "capture_text") {
+		t.Fatalf("voiceAssistantPrompt dropped unrelated metadata:\n%s", got)
+	}
+}
+
+func TestSharedSystemPromptSkipsDuplicateBuiltinPrompt(t *testing.T) {
+	t.Parallel()
+
+	got := sharedSystemPrompt(service.VoiceAssistantMetadata{
+		Metadata: map[string]any{
+			"shared_system_prompt": " \n" + voiceReplySystemPrompt + "\n",
+		},
+	})
+	if got != "" {
+		t.Fatalf("sharedSystemPrompt duplicate = %q, want empty", got)
+	}
+}
+
+func TestCurrentDatePromptUsesSessionDate(t *testing.T) {
+	t.Parallel()
+
+	got := currentDatePrompt(time.Date(2026, 6, 22, 15, 45, 0, 0, time.FixedZone("CST", 8*3600)))
+	if !strings.Contains(got, "2026-06-22") {
+		t.Fatalf("currentDatePrompt = %q, want date", got)
+	}
+}
+
+func TestMostlyRecentSpeechEchoSuppressesRecentAssistantOnly(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
+	s := &session{
+		now: func() time.Time { return now },
+		recentSpeech: []recentSpeechText{
+			{text: "好的，我会继续监听。", at: now},
+			{text: "现在可以继续说。", at: now},
+		},
+	}
+
+	match, ok := s.mostlyRecentSpeechEcho("好的我会继续聆听，现在可以继续说")
+	if !ok {
+		t.Fatalf("expected recent assistant speech echo match, best=%+v", match)
+	}
+	if match.score < echoSimilarityThreshold {
+		t.Fatalf("match score = %.2f, want >= %.2f", match.score, echoSimilarityThreshold)
+	}
+}
+
+func TestMostlyRecentSpeechEchoAllowsNewIntentAfterEcho(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
+	s := &session{
+		now: func() time.Time { return now },
+		recentSpeech: []recentSpeechText{
+			{text: "好的，我会继续监听。", at: now},
+		},
+	}
+
+	if match, ok := s.mostlyRecentSpeechEcho("好的，我会继续监听，帮我打开设置"); ok {
+		t.Fatalf("mixed echo and new intent was suppressed, match=%+v", match)
+	}
+}
+
+func TestMostlyRecentSpeechEchoIgnoresExpiredSpeech(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
+	s := &session{
+		now: func() time.Time { return now },
+		recentSpeech: []recentSpeechText{
+			{text: "好的，我会继续监听。", at: now.Add(-recentSpeechWindow - time.Second)},
+		},
+	}
+
+	if match, ok := s.mostlyRecentSpeechEcho("好的，我会继续监听。"); ok {
+		t.Fatalf("expired speech was suppressed, match=%+v", match)
+	}
+}
+
+func TestPlaybackEchoGuardCoversEstimatedTTSPlayback(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 7, 12, 0, 0, 0, time.UTC)
+	s := &session{now: func() time.Time { return now }}
+	format := provider.AudioFormat{Codec: "pcm_s16le", SampleRateHz: 16000, Channels: 1}
+
+	until := s.extendPlaybackEchoWindow(format, 16000*2*5)
+	if !until.Equal(now.Add(5*time.Second + playbackEchoGuardSlack)) {
+		t.Fatalf("echo window = %s, want %s", until, now.Add(5*time.Second+playbackEchoGuardSlack))
+	}
+	now = now.Add(time.Second)
+	if !now.Before(s.playbackEchoUntil) {
+		t.Fatal("input one second after TTS send should be inside playback echo window")
+	}
+	now = now.Add(6 * time.Second)
+	if !now.After(s.playbackEchoUntil) {
+		t.Fatal("input after estimated playback should be outside playback echo window")
+	}
+}
+
+func TestPlaybackEchoGuardDurationUsesMinimumForShortAudio(t *testing.T) {
+	t.Parallel()
+
+	format := provider.AudioFormat{Codec: "pcm_s16le", SampleRateHz: 16000, Channels: 1}
+	got := playbackEchoGuardDuration(format, 16000)
+	want := playbackEchoGuardMin + playbackEchoGuardSlack
+	if got != want {
+		t.Fatalf("short playback echo duration = %s, want %s", got, want)
 	}
 }
 

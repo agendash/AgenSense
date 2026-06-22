@@ -123,6 +123,10 @@ func openAIASRPrompt() string {
 	return defaultOpenAIASRPrompt
 }
 
+func openAIReasoningEffort() string {
+	return strings.TrimSpace(os.Getenv("AGENSENSE_OPENAI_REASONING_EFFORT"))
+}
+
 type OpenAICompatibleLLM struct {
 	httpClient *http.Client
 	baseURL    string
@@ -146,6 +150,9 @@ func (c *OpenAICompatibleLLM) ChatStream(ctx context.Context, req ChatRequest, c
 		"model":    c.model,
 		"messages": messages,
 		"stream":   true,
+	}
+	if effort := openAIReasoningEffort(); effort != "" {
+		body["reasoning_effort"] = effort
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -426,6 +433,12 @@ func (c *OpenAICompatibleTTS) synthesizeOnce(ctx context.Context, text string, v
 		"input":           text,
 		"response_format": openAITTSResponseFormat(),
 	}
+	if openAITTSStreamEnabled(c.baseURL) {
+		body["stream"] = true
+		if interval := openAITTSStreamingInterval(); interval > 0 {
+			body["streaming_interval"] = interval
+		}
+	}
 	if includeVoice {
 		body["voice"] = voice
 	}
@@ -489,6 +502,49 @@ func openAITTSResponseFormat() string {
 		return "pcm"
 	}
 	return format
+}
+
+func openAITTSStreamEnabled(baseURL string) bool {
+	value, ok := os.LookupEnv("AGENSENSE_OPENAI_TTS_STREAM")
+	if !ok {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "1", "true", "yes", "on":
+		return openAITTSStreamBaseURLAllowed(baseURL)
+	default:
+		return false
+	}
+}
+
+func openAITTSStreamBaseURLAllowed(baseURL string) bool {
+	allowlist := strings.TrimSpace(os.Getenv("AGENSENSE_OPENAI_TTS_STREAM_BASE_URLS"))
+	if allowlist == "" {
+		return true
+	}
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	for _, item := range strings.Split(allowlist, ",") {
+		allowed := strings.TrimRight(strings.TrimSpace(item), "/")
+		if allowed == "" {
+			continue
+		}
+		if baseURL == allowed || strings.HasPrefix(baseURL+"/", allowed+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func openAITTSStreamingInterval() int {
+	value := strings.TrimSpace(os.Getenv("AGENSENSE_OPENAI_TTS_STREAMING_INTERVAL"))
+	if value == "" {
+		return 0
+	}
+	var interval int
+	if _, err := fmt.Sscanf(value, "%d", &interval); err != nil || interval <= 0 {
+		return 0
+	}
+	return interval
 }
 
 func openAITTSSentenceStreamEnabled() bool {

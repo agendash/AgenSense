@@ -48,6 +48,9 @@ func EnsureDefaultProviderProfile(ctx context.Context, repo device.Repository, c
 		TTSBaseURL:        strings.TrimSpace(cfg.DefaultProviderBaseURL),
 		TTSAPIKey:         strings.TrimSpace(cfg.DefaultProviderAPIKey),
 		TTSModel:          strings.TrimSpace(cfg.DefaultTTSModel),
+		VADBaseURL:        strings.TrimSpace(cfg.DefaultProviderBaseURL),
+		VADAPIKey:         strings.TrimSpace(cfg.DefaultProviderAPIKey),
+		VADModel:          strings.TrimSpace(cfg.DefaultVADModel),
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}

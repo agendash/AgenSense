@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,11 +39,14 @@ const (
 	partialMinGrowthFactor          = 1200 * time.Millisecond
 	vadSpeechThreshold              = 0.012
 	vadSilenceReleaseFactor         = 220 * time.Millisecond
-	realtimeTTSMaxRunes             = 48
-	realtimeTTSSoftMinRunes         = 36
+	defaultRealtimeTTSMaxRunes      = 28
+	defaultRealtimeTTSSoftMinRunes  = 20
 	recentSpeechWindow              = 20 * time.Second
 	recentSpeechLimit               = 4
 	echoMinRunes                    = 8
+	echoSimilarityThreshold         = 0.86
+	playbackEchoGuardMin            = 2 * time.Second
+	playbackEchoGuardSlack          = 1500 * time.Millisecond
 	conversationIdleTimeout         = 3 * time.Minute
 	conversationTargetPct           = 70
 	conversationCompressPct         = 80
@@ -64,20 +69,6 @@ Respond for speech playback, not a terminal or chat transcript.
 - Do not narrate hidden reasoning or internal implementation details.
 - If no remote code agent is focused, stay in local assistant mode and say that a focused agent is required for remote execution.
 - If the request clearly sounds like an approval, scene switch, or playback command, keep the wording brief and confirmation-oriented.`
-
-const voiceEchoContextPrompt = `Acoustic echo guard:
-The latest user text is a raw ASR transcript. It may include casual speech, partial phrases, recognition errors, or acoustic echo from assistant audio that was just played.
-Compare the assistant speech below with the latest ASR transcript. If the ASR mostly repeats assistant speech, treat it as echo and do not execute or advance that repeated content.
-If the ASR includes both echo and a new user request, discard only the echoed portion and answer the new request.
-Preserve exact names, numbers, paths, commands, and model identifiers from the user's new intent.
-
-Assistant speech already played:
-%s
-
-Raw latest ASR transcript:
-%s
-
-Return a natural spoken reply for the inferred user intent. Keep it brief; ask one short clarification if the new intent is not stable enough.`
 
 const mcpProposalSystemPrompt = `You are an MCP call planner for a voice gateway.
 Convert the latest raw ASR transcript into exactly one proposed MCP tool call for the client to review or execute later.
@@ -122,6 +113,8 @@ type session struct {
 	inboundAudio   []byte
 	inboundSeq     int
 	turnTrace      *debugtrace.Handle
+	inputStartedAt time.Time
+	inputEchoGuard bool
 
 	speechActive     bool
 	silenceBytes     int
@@ -139,9 +132,10 @@ type session struct {
 	lastPartialText string
 	lastPartialSize int
 
-	responseCancel context.CancelFunc
-	responseStatus responseRuntime
-	recentSpeech   []recentSpeechText
+	responseCancel    context.CancelFunc
+	responseStatus    responseRuntime
+	recentSpeech      []recentSpeechText
+	playbackEchoUntil time.Time
 
 	idCounter int64
 }
@@ -180,6 +174,11 @@ type realtimeTTSSegmenter struct {
 type recentSpeechText struct {
 	text string
 	at   time.Time
+}
+
+type recentSpeechEchoMatch struct {
+	text  string
+	score float64
 }
 
 type conversationTurn struct {
@@ -489,6 +488,10 @@ func (s *session) handleAudioStart(payload protocol.AudioStartPayload) error {
 	if err := s.inboundTracker.Start(payload); err != nil {
 		return err
 	}
+	now := s.now()
+	cfg := s.cfg
+	playbackEchoUntil := s.playbackEchoUntil
+	inputEchoGuard := cfg.AutoRespond && now.Before(playbackEchoUntil)
 	s.inboundFormat = provider.AudioFormat{
 		Codec:        payload.Codec,
 		SampleRateHz: payload.SampleRateHz,
@@ -496,6 +499,8 @@ func (s *session) handleAudioStart(payload protocol.AudioStartPayload) error {
 	}
 	s.inboundAudio = s.inboundAudio[:0]
 	s.inboundSeq = 0
+	s.inputStartedAt = now
+	s.inputEchoGuard = inputEchoGuard
 	s.speechActive = false
 	s.silenceBytes = 0
 	s.segmentSeq = 0
@@ -513,6 +518,9 @@ func (s *session) handleAudioStart(payload protocol.AudioStartPayload) error {
 	s.turnTrace = s.startTraceLocked(payload.StreamID)
 	if s.turnTrace != nil {
 		s.turnTrace.AddEvent("ws.audio.start", fmt.Sprintf("%s · %s · %d Hz · %d ch", payload.StreamID, payload.Codec, payload.SampleRateHz, payload.Channels))
+		if inputEchoGuard {
+			s.turnTrace.AddEvent("playback.echo_guard", fmt.Sprintf("input started %s before playback echo window ended", playbackEchoUntil.Sub(now).Round(time.Millisecond)))
+		}
 	}
 	return nil
 }
@@ -536,6 +544,7 @@ func (s *session) handleAudioChunk(ctx context.Context, payload []byte) error {
 	audioSnapshot := append([]byte(nil), s.inboundAudio...)
 	streamID := stream.StreamID
 	now := s.now()
+	inputEchoGuard := s.inputEchoGuard
 	level := pcmLevel(payload)
 	speaking := level >= vadSpeechThreshold
 	stateChanged := false
@@ -571,6 +580,7 @@ func (s *session) handleAudioChunk(ctx context.Context, payload []byte) error {
 	}
 
 	canPartial := s.asr != nil &&
+		!inputEchoGuard &&
 		len(audioSnapshot) > 0 &&
 		!s.partialInFlight &&
 		(now.Sub(s.lastPartialAt) >= partialMinWindow || s.lastPartialAt.IsZero()) &&
@@ -632,10 +642,15 @@ func (s *session) handleAudioStop(ctx context.Context, payload protocol.AudioSto
 	asrClient := s.asr
 	cfg := s.cfg
 	trace := s.turnTrace
+	inputEchoGuard := s.inputEchoGuard
+	inputStartedAt := s.inputStartedAt
+	playbackEchoUntil := s.playbackEchoUntil
 	completed := s.completeActiveSegmentLocked(payload.StreamID, format, len(s.inboundAudio), 0)
 	partialCancel := s.cancelPartialASRLocked()
 	s.inboundAudio = s.inboundAudio[:0]
 	s.inboundSeq = 0
+	s.inputStartedAt = time.Time{}
+	s.inputEchoGuard = false
 	s.mu.Unlock()
 	if partialCancel != nil {
 		partialCancel()
@@ -648,6 +663,20 @@ func (s *session) handleAudioStop(ctx context.Context, payload protocol.AudioSto
 	}
 	if completed != nil {
 		s.recordCompletedSegment(completed)
+	}
+	if inputEchoGuard {
+		if trace != nil {
+			trace.AddEvent("playback.echo_suppressed", fmt.Sprintf("input_started=%s echo_until=%s audio_bytes=%d",
+				inputStartedAt.Format(time.RFC3339Nano),
+				playbackEchoUntil.Format(time.RFC3339Nano),
+				len(audio),
+			))
+			trace.AddEvent("response.done", "echo_suppressed")
+			trace.Complete()
+			s.clearTurnTrace(trace)
+		}
+		_ = s.writeEvent(eventResponseDone, responseDonePayload{Status: "echo_suppressed"})
+		return nil
 	}
 	if asrClient == nil {
 		if trace != nil {
@@ -740,6 +769,12 @@ func (s *session) runPartialASR(ctx context.Context, runID int64, asr provider.A
 	if text == "" {
 		return
 	}
+	if match, ok := s.mostlyRecentSpeechEcho(text); ok {
+		if trace := s.currentTurnTrace(); trace != nil {
+			trace.AddEvent("asr.partial.echo_suppressed", fmt.Sprintf("score=%.2f text=%s", match.score, previewDetail(text, 96)))
+		}
+		return
+	}
 
 	s.mu.Lock()
 	active, _, ok := s.inboundTracker.Active()
@@ -790,6 +825,23 @@ func (s *session) runFinalASR(ctx context.Context, asr provider.ASRClient, cfg s
 			trace.SetSegmentText(lastSegmentID, text)
 		}
 	}
+	if cfg.AutoRespond {
+		if match, ok := s.mostlyRecentSpeechEcho(text); ok {
+			if trace != nil {
+				trace.AddEvent("echo.suppressed", fmt.Sprintf("score=%.2f matched=%s", match.score, previewDetail(match.text, 96)))
+				trace.AddEvent("response.done", "echo_suppressed")
+				trace.Complete()
+				s.clearTurnTrace(trace)
+			}
+			slog.InfoContext(ctx, "voice websocket suppressed assistant echo",
+				"score", match.score,
+				"asr_preview", previewDetail(text, 96),
+				"matched_preview", previewDetail(match.text, 96),
+			)
+			_ = s.writeEvent(eventResponseDone, responseDonePayload{Status: "echo_suppressed"})
+			return
+		}
+	}
 	if err := s.writeEvent(protocol.EventASRFinal, protocol.ASRFinalPayload{
 		StreamID: streamID,
 		Text:     text,
@@ -833,6 +885,7 @@ func (s *session) runResponse(ctx context.Context, llm provider.LLMClient, tts p
 	messages := []provider.ChatMessage{
 		{Role: "system", Content: voiceReplySystemPrompt},
 		{Role: "system", Content: languageInstruction},
+		{Role: "system", Content: currentDatePrompt(s.now())},
 	}
 	if !voiceAssistant.Empty() {
 		contextPrompt := voiceAssistantPrompt(voiceAssistant)
@@ -1083,6 +1136,10 @@ func (s *session) runResponse(ctx context.Context, llm provider.LLMClient, tts p
 		}
 		return
 	}
+	echoUntil := s.extendPlaybackEchoWindow(ttsFormat, ttsResult.audioBytes)
+	if trace != nil && !echoUntil.IsZero() {
+		trace.AddEvent("playback.echo_window", echoUntil.Format(time.RFC3339Nano))
+	}
 
 	status := "completed"
 	if ctx.Err() == context.Canceled {
@@ -1316,14 +1373,40 @@ func (s *realtimeTTSSegmenter) Add(text string) []string {
 		return nil
 	}
 	var segments []string
+	maxRunes := realtimeTTSMaxRunes()
+	softMinRunes := realtimeTTSSoftMinRunes(maxRunes)
 	for _, r := range text {
 		s.buf.WriteRune(r)
 		s.runeCount++
-		if isRealtimeTTSSentenceBreak(r) || r == '\n' || s.runeCount >= realtimeTTSMaxRunes || (s.runeCount >= realtimeTTSSoftMinRunes && isRealtimeTTSSoftBreak(r)) {
+		if isRealtimeTTSSentenceBreak(r) || r == '\n' || s.runeCount >= maxRunes || (s.runeCount >= softMinRunes && isRealtimeTTSSoftBreak(r)) {
 			segments = appendFlushedRealtimeTTSSegment(segments, s)
 		}
 	}
 	return segments
+}
+
+func realtimeTTSMaxRunes() int {
+	return realtimeTTSEnvInt("AGENSENSE_REALTIME_TTS_MAX_RUNES", defaultRealtimeTTSMaxRunes)
+}
+
+func realtimeTTSSoftMinRunes(maxRunes int) int {
+	softMin := realtimeTTSEnvInt("AGENSENSE_REALTIME_TTS_SOFT_MIN_RUNES", defaultRealtimeTTSSoftMinRunes)
+	if softMin > maxRunes {
+		return maxRunes
+	}
+	return softMin
+}
+
+func realtimeTTSEnvInt(name string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
 }
 
 func (s *realtimeTTSSegmenter) Flush() []string {
@@ -1412,9 +1495,101 @@ func (s *session) recentSpeechPrompt(asrText string) string {
 	}
 	lines := make([]string, 0, len(items))
 	for _, item := range items {
-		lines = append(lines, "- "+item.text)
+		lines = append(lines, strings.TrimSpace(item.text))
 	}
-	return fmt.Sprintf(voiceEchoContextPrompt, strings.Join(lines, "\n"), strings.TrimSpace(asrText))
+	return fmt.Sprintf(
+		"Recent assistant speech, for echo cleanup only: %s\nRaw latest ASR: %s\nIf the ASR contains both echo and a new request, ignore the echo and answer only the new request.",
+		strings.Join(lines, " | "),
+		strings.TrimSpace(asrText),
+	)
+}
+
+func (s *session) mostlyRecentSpeechEcho(asrText string) (recentSpeechEchoMatch, bool) {
+	asrNormalized := normalizeEchoText(asrText)
+	if len([]rune(asrNormalized)) < echoMinRunes {
+		return recentSpeechEchoMatch{}, false
+	}
+	var best recentSpeechEchoMatch
+	for _, candidate := range recentSpeechCandidates(s.recentSpeechSnapshot()) {
+		candidateNormalized := normalizeEchoText(candidate)
+		if len([]rune(candidateNormalized)) < echoMinRunes {
+			continue
+		}
+		score, matched := recentSpeechEchoScore(asrNormalized, candidateNormalized)
+		if score > best.score {
+			best = recentSpeechEchoMatch{text: candidate, score: score}
+		}
+		if matched {
+			return recentSpeechEchoMatch{text: candidate, score: score}, true
+		}
+	}
+	return best, false
+}
+
+func recentSpeechCandidates(items []recentSpeechText) []string {
+	candidates := make([]string, 0, len(items)*2)
+	for start := range items {
+		var combined strings.Builder
+		for end := start; end < len(items); end++ {
+			text := strings.TrimSpace(items[end].text)
+			if text == "" {
+				continue
+			}
+			if combined.Len() > 0 {
+				combined.WriteString(" ")
+			}
+			combined.WriteString(text)
+			candidates = append(candidates, text)
+			if end > start {
+				candidates = append(candidates, combined.String())
+			}
+		}
+	}
+	return candidates
+}
+
+func recentSpeechEchoScore(asrNormalized string, candidateNormalized string) (float64, bool) {
+	asrRunes := len([]rune(asrNormalized))
+	candidateRunes := len([]rune(candidateNormalized))
+	if asrRunes == 0 || candidateRunes == 0 {
+		return 0, false
+	}
+	if strings.Contains(candidateNormalized, asrNormalized) {
+		return 1, true
+	}
+	if strings.Contains(asrNormalized, candidateNormalized) {
+		extraRunes := asrRunes - candidateRunes
+		score := float64(candidateRunes) / float64(asrRunes)
+		return score, extraRunes <= max(2, asrRunes/10)
+	}
+	common := longestCommonSubsequenceRunes(asrNormalized, candidateNormalized)
+	asrCoverage := float64(common) / float64(asrRunes)
+	candidateCoverage := float64(common) / float64(candidateRunes)
+	return asrCoverage, asrCoverage >= echoSimilarityThreshold && candidateCoverage >= 0.55
+}
+
+func longestCommonSubsequenceRunes(a string, b string) int {
+	left := []rune(a)
+	right := []rune(b)
+	if len(left) == 0 || len(right) == 0 {
+		return 0
+	}
+	previous := make([]int, len(right)+1)
+	current := make([]int, len(right)+1)
+	for _, lr := range left {
+		for j, rr := range right {
+			if lr == rr {
+				current[j+1] = previous[j] + 1
+			} else {
+				current[j+1] = max(current[j], previous[j+1])
+			}
+		}
+		previous, current = current, previous
+		for j := range current {
+			current[j] = 0
+		}
+	}
+	return previous[len(right)]
 }
 
 func (s *session) recentSpeechSnapshot() []recentSpeechText {
@@ -1435,6 +1610,31 @@ func (s *session) recentSpeechSnapshot() []recentSpeechText {
 		s.recentSpeech = items
 	}
 	return append([]recentSpeechText(nil), items...)
+}
+
+func (s *session) extendPlaybackEchoWindow(format provider.AudioFormat, audioBytes int) time.Time {
+	duration := playbackEchoGuardDuration(format, audioBytes)
+	if duration <= 0 {
+		return time.Time{}
+	}
+	until := s.now().Add(duration)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if until.After(s.playbackEchoUntil) {
+		s.playbackEchoUntil = until
+	}
+	return s.playbackEchoUntil
+}
+
+func playbackEchoGuardDuration(format provider.AudioFormat, audioBytes int) time.Duration {
+	playback := formatByteDuration(format, audioBytes)
+	if playback <= 0 {
+		return 0
+	}
+	if playback < playbackEchoGuardMin {
+		playback = playbackEchoGuardMin
+	}
+	return playback + playbackEchoGuardSlack
 }
 
 func newConversationMemoryStore() *conversationMemoryStore {
@@ -1856,6 +2056,12 @@ func (s *session) cancelPartialASR() {
 	}
 }
 
+func (s *session) currentTurnTrace() *debugtrace.Handle {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.turnTrace
+}
+
 func (s *session) cancelPartialASRLocked() context.CancelFunc {
 	cancel := s.partialCancel
 	s.partialRunID++
@@ -2028,11 +2234,33 @@ func voiceAssistantPrompt(metadata service.VoiceAssistantMetadata) string {
 	if metadata.Empty() {
 		return ""
 	}
-	payload := compactJSON(metadata)
+	payload := compactJSON(sanitizedVoiceAssistantMetadata(metadata))
 	if payload == "" {
 		return ""
 	}
 	return "AgenDash Universal Voice Layer context JSON. Use it only to resolve scope, target, UI surface, and confirmation safety. Do not read raw JSON back to the user unless asked.\n" + payload
+}
+
+func currentDatePrompt(now time.Time) string {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	return "Current server date: " + now.Format("2006-01-02") + ". Use this for date questions."
+}
+
+func sanitizedVoiceAssistantMetadata(metadata service.VoiceAssistantMetadata) service.VoiceAssistantMetadata {
+	if len(metadata.Metadata) == 0 {
+		return metadata
+	}
+	next := metadata
+	next.Metadata = make(map[string]any, len(metadata.Metadata))
+	for key, value := range metadata.Metadata {
+		if strings.EqualFold(strings.TrimSpace(key), "shared_system_prompt") {
+			continue
+		}
+		next.Metadata[key] = value
+	}
+	return next
 }
 
 func sharedSystemPrompt(metadata service.VoiceAssistantMetadata) string {
@@ -2047,7 +2275,15 @@ func sharedSystemPrompt(metadata service.VoiceAssistantMetadata) string {
 	if !ok {
 		return ""
 	}
-	return strings.TrimSpace(prompt)
+	prompt = strings.TrimSpace(prompt)
+	if samePrompt(prompt, voiceReplySystemPrompt) {
+		return ""
+	}
+	return prompt
+}
+
+func samePrompt(left string, right string) bool {
+	return strings.Join(strings.Fields(left), " ") == strings.Join(strings.Fields(right), " ")
 }
 
 func mcpToolsFromVoiceAssistant(metadata service.VoiceAssistantMetadata) []string {

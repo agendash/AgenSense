@@ -6,6 +6,7 @@
 * [Local Runbook](mvp-local-runbook.md)
 * [AgenSense GUI Lite](gui-lite.md)
 * [Deployment](deployment.md)
+* [oMLX Setup](omlx.md)
 * [LocalAI Setup](localai.md)
 * [Release Process](release.md)
 * [Device Bootstrap](device-bootstrap.md)

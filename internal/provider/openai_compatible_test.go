@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,11 +16,27 @@ func TestOpenAICompatibleLLMMergesSystemMessages(t *testing.T) {
 		if r.URL.Path != "/chat/completions" {
 			t.Fatalf("path = %q, want /chat/completions", r.URL.Path)
 		}
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("ReadAll() error = %v", err)
+		}
 		var body struct {
 			Messages []ChatMessage `json:"messages"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		if err := json.NewDecoder(bytes.NewReader(raw)).Decode(&body); err != nil {
 			t.Fatalf("Decode() error = %v", err)
+		}
+		var rawBody struct {
+			Messages []map[string]any `json:"messages"`
+		}
+		if err := json.NewDecoder(bytes.NewReader(raw)).Decode(&rawBody); err != nil {
+			t.Fatalf("Decode raw body error = %v", err)
+		}
+		if _, ok := rawBody.Messages[0]["role"]; !ok {
+			t.Fatalf("message json key role missing: %#v", rawBody.Messages[0])
+		}
+		if _, ok := rawBody.Messages[0]["Role"]; ok {
+			t.Fatalf("message json has uppercase Role key: %#v", rawBody.Messages[0])
 		}
 		if len(body.Messages) != 2 {
 			t.Fatalf("messages len = %d, want 2: %#v", len(body.Messages), body.Messages)
@@ -44,6 +61,41 @@ func TestOpenAICompatibleLLMMergesSystemMessages(t *testing.T) {
 			{Role: "system", Content: "beta"},
 			{Role: "user", Content: "hello"},
 		},
+	}, func(delta ChatDelta) error {
+		got.WriteString(delta.Text)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ChatStream() error = %v", err)
+	}
+	if got.String() != "ok" {
+		t.Fatalf("streamed text = %q, want ok", got.String())
+	}
+}
+
+func TestOpenAICompatibleLLMSendsReasoningEffort(t *testing.T) {
+	t.Setenv("AGENSENSE_OPENAI_REASONING_EFFORT", "none")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			ReasoningEffort string `json:"reasoning_effort"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		if body.ReasoningEffort != "none" {
+			t.Fatalf("reasoning_effort = %q, want none", body.ReasoningEffort)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	client := NewOpenAICompatibleLLM(server.Client(), server.URL, "", "test-llm")
+	var got strings.Builder
+	err := client.ChatStream(context.Background(), ChatRequest{
+		Messages: []ChatMessage{{Role: "user", Content: "hello"}},
 	}, func(delta ChatDelta) error {
 		got.WriteString(delta.Text)
 		return nil
@@ -205,6 +257,66 @@ func TestOpenAICompatibleTTSOmitsVoiceForQwen3AndUnwrapsWAV(t *testing.T) {
 	}
 	if gotFormat.Codec != "pcm_s16le" || gotFormat.SampleRateHz != 24000 || gotFormat.Channels != 1 {
 		t.Fatalf("format = %+v, want 24k pcm_s16le mono", gotFormat)
+	}
+}
+
+func TestOpenAICompatibleTTSStreamAllowlist(t *testing.T) {
+	t.Setenv("AGENSENSE_OPENAI_TTS_SENTENCE_STREAM", "0")
+	t.Setenv("AGENSENSE_OPENAI_TTS_STREAM", "1")
+	t.Setenv("AGENSENSE_OPENAI_TTS_STREAM_BASE_URLS", "http://127.0.0.1:18082/v1")
+
+	pcm := bytes.Repeat([]byte{0x01, 0x02}, 16)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		if _, ok := body["stream"]; ok {
+			t.Fatal("request unexpectedly included stream for non-allowlisted base URL")
+		}
+		_, _ = w.Write(pcm)
+	}))
+	defer server.Close()
+
+	client := NewOpenAICompatibleTTS(server.Client(), server.URL, "", "test-tts")
+	err := client.SynthesizeStream(context.Background(), TTSRequest{
+		Text:   "hello",
+		Format: AudioFormat{Codec: "pcm_s16le", SampleRateHz: 16000, Channels: 1},
+	}, func(AudioChunk) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("SynthesizeStream() error = %v", err)
+	}
+}
+
+func TestOpenAICompatibleTTSStreamAllowlistMatch(t *testing.T) {
+	t.Setenv("AGENSENSE_OPENAI_TTS_SENTENCE_STREAM", "0")
+	t.Setenv("AGENSENSE_OPENAI_TTS_STREAM", "1")
+
+	pcm := bytes.Repeat([]byte{0x01, 0x02}, 16)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("Decode() error = %v", err)
+		}
+		if body["stream"] != true {
+			t.Fatalf("stream = %#v, want true", body["stream"])
+		}
+		_, _ = w.Write(pcm)
+	}))
+	defer server.Close()
+	t.Setenv("AGENSENSE_OPENAI_TTS_STREAM_BASE_URLS", server.URL)
+
+	client := NewOpenAICompatibleTTS(server.Client(), server.URL, "", "test-tts")
+	err := client.SynthesizeStream(context.Background(), TTSRequest{
+		Text:   "hello",
+		Format: AudioFormat{Codec: "pcm_s16le", SampleRateHz: 16000, Channels: 1},
+	}, func(AudioChunk) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("SynthesizeStream() error = %v", err)
 	}
 }
 

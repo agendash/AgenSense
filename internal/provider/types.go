@@ -24,8 +24,8 @@ type TranscribeResponse struct {
 
 // ChatMessage is the provider-agnostic chat message shape.
 type ChatMessage struct {
-	Role    string
-	Content string
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
 // ChatRequest is the provider-agnostic LLM input.
